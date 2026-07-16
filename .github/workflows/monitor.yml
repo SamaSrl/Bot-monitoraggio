@@ -2,11 +2,12 @@ name: FusionSolar Monitor Cron
 
 on:
   schedule:
+    # Gira ogni 30 minuti (orari UTC)
     - cron: '*/30 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Ti permette di avviarlo manualmente con un clic da GitHub
 
 permissions:
-  contents: write
+  contents: write # Permessi di scrittura per poter salvare il file JSON nella repository
 
 jobs:
   run-monitor:
@@ -32,21 +33,23 @@ jobs:
         FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
         FUSIONSOLAR_PASSWORD: ${{ secrets.FUSIONSOLAR_PASSWORD }}
       run: python src/main.py
-- name: Salva e carica i dati aggiornati
+
+    - name: Salva e carica i dati aggiornati
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --global user.name "FusionSolar Bot"
         git config --global user.email "bot@fusionsolar.local"
         
-        # Cerca dove si trova effettivamente il file dashboard.json ed esegue l'add dinamico
+        # Trova dove si trova effettivamente il file dashboard.json (ovunque sia nella cartella del progetto)
         FILE_PATH=$(find . -name "dashboard.json" | head -n 1)
         
         if [ -n "$FILE_PATH" ]; then
           echo "Trovato dashboard.json in: $FILE_PATH"
           git add "$FILE_PATH"
+          # Esegue il commit e il push solo se ci sono modifiche reali nei dati, usando il token di sicurezza
           git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiornamento dati impianti" && git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git HEAD:main)
         else
-          echo "ERRORE: dashboard.json non è stato generato dal bot!"
+          echo "ERRORE: Il file dashboard.json non è stato generato dal bot!"
           exit 1
         fi
