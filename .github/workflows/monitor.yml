@@ -32,8 +32,7 @@ jobs:
         FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
         FUSIONSOLAR_PASSWORD: ${{ secrets.FUSIONSOLAR_PASSWORD }}
       run: python src/main.py
-
-   - name: Salva e carica i dati aggiornati
+- name: Salva e carica i dati aggiornati
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
