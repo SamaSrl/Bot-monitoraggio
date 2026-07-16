@@ -34,10 +34,12 @@ jobs:
         FUSIONSOLAR_PASSWORD: ${{ secrets.FUSIONSOLAR_PASSWORD }}
       run: python src/main.py
 
-    - name: Salva e carica i dati aggiornati
+   - name: Salva e carica i dati aggiornati
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --global user.name "FusionSolar Bot"
         git config --global user.email "bot@fusionsolar.local"
         git add web_app/data/dashboard.json
-        # Eseguiamo il commit solo se il file JSON è effettivamente cambiato
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiornamento dati impianti" && git push)
+        # Usiamo il token per autenticare il push
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiornamento dati impianti" && git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git HEAD:main)
