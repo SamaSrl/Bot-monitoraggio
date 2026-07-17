@@ -6,59 +6,57 @@ FUSIONSOLAR_HOST = "https://eu5.fusionsolar.huawei.com"
 
 def get_fusionsolar_session(username, password):
     """
-    Usa Playwright per simulare il login e catturare i cookie di sessione
-    e il token XSRF necessari per le chiamate successive.
+    Usa Playwright simulando un browser umano reale per bypassare i blocchi script.
     """
-    print("[*] Avvio del browser headless...")
+    print("[*] Avvio del browser in modalità camuffata...")
     
     with sync_playwright() as p:
+        # Lanciamo chromium imitando un utente reale su Windows
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1280, "height": 800})
+        
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            timezone_id="Europe/Rome",
+            extra_http_headers={
+                "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+            }
+        )
+        
         page = context.new_page()
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle")
-            page.wait_for_timeout(5000) # Forziamo 5 secondi interi per assicurarci che gli script di Huawei siano pronti
-
-            print("[*] Inserimento credenziali con metodo hardware...")
+            # Diamo fino a 60 secondi per caricare tutto a causa della latenza dei server remoti
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             
-            # Selettore specifico per il campo Username di FusionSolar
-            user_selector = "input[type='text'], .username-input input, input[placeholder*='User']"
+            print("[*] Attesa stabilizzazione degli script della pagina...")
+            page.wait_for_timeout(7000) # 7 secondi di attesa forzata per far svegliare i moduli JavaScript
+
+            print("[*] Inserimento credenziali...")
+            
+            # Utilizziamo una strategia di inserimento mista: prima clicchiamo, poi scriviamo
+            user_selector = "input[type='text'], input[placeholder*='User'], .username-input input"
             page.wait_for_selector(user_selector, timeout=15000)
             
-            # Forziamo il focus e l'inserimento simulando la tastiera fisica
-            page.focus(user_selector)
             page.click(user_selector)
-            page.keyboard.press("Control+A")
-            page.keyboard.press("Backspace")
-            page.keyboard.type(username, delay=100) # Digita lentamente come un umano
+            page.locator(user_selector).first.fill(username)
+            page.wait_for_timeout(5000) # Pausa di controllo
 
-            # Selettore specifico per il campo Password di FusionSolar
-            pass_selector = "input[type='password'], .password-input input, input[placeholder*='Pass']"
-            page.focus(pass_selector)
+            pass_selector = "input[type='password'], input[placeholder*='Pass'], .password-input input"
             page.click(pass_selector)
-            page.keyboard.press("Control+A")
-            page.keyboard.press("Backspace")
-            page.keyboard.type(password, delay=100)
-            
-            print("[*] Invio del modulo di Login...")
-            # Premiamo INVIO direttamente dalla tastiera per evitare di mancare il bottone blu
-            page.keyboard.press("Enter")
-            
-            # Se l'invio con Enter non bastasse, fa anche il click di backup sul bottone
-            page.wait_for_timeout(2000)
-            try:
-                page.locator("button[type='submit'], .login-btn, #login-submit, button:has-text('Log In')").first.click(timeout=3000)
-            except Exception:
-                pass # Se ha già fatto il redirect con Enter, questo fallirà ma andiamo avanti
+            page.locator(pass_selector).first.fill(password)
+            page.wait_for_timeout(5000)
 
-            # Aspettiamo il caricamento della pagina principale post-login
+            print("[*] Click sul pulsante Log In...")
+            login_btn = page.locator("button:has-text('Log In'), button[type='submit'], .login-btn").first
+            login_btn.click()
+            
             print("[*] Attesa reindirizzamento alla dashboard...")
             page.wait_for_url("**/index.html**", timeout=30000)
             print("[+] Login completato con successo!")
 
-            # Estraiamo i cookie e il token
             cookies = context.cookies()
             session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
             
@@ -72,7 +70,7 @@ def get_fusionsolar_session(username, password):
             return session_cookies, xsrf_token
 
         except Exception as e:
-            print(f"[-] Errore durante la sessione del browser: {e}")
+            print(f"[-] Errore durante la sessione camuffata: {e}")
             try:
                 page.screenshot(path="error_screenshot.png")
                 print("[*] Nuovo screenshot di errore salvato.")
