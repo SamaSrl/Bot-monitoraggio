@@ -6,10 +6,10 @@ FUSIONSOLAR_HOST = "https://eu5.fusionsolar.huawei.com"
 
 def get_fusionsolar_session(username, password):
     """
-    Usa Playwright simulando un browser umano reale e iniettando le credenziali
-    direttamente nel codice della pagina italiana per superare i blocchi grafici.
+    Usa Playwright simulando un browser umano reale e scansionando anche eventuali 
+    iframe nidificati per trovare e compilare i campi di login di FusionSolar.
     """
-    print("[*] Avvio del browser in modalità camuffata (IT)...")
+    print("[*] Avvio del browser in modalità multi-frame (IT)...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -30,47 +30,54 @@ def get_fusionsolar_session(username, password):
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             
-            print("[*] Attesa stabilizzazione interfaccia italiana...")
-            page.wait_for_timeout(8000) # 8 secondi per garantire il caricamento degli script asincroni
+            print("[*] Attesa stabilizzazione interfaccia...")
+            page.wait_for_timeout(8000) # Attesa per il caricamento completo degli script asincroni
 
-            print("[*] Compilazione credenziali tramite iniettore...")
-            
-            # Selettori universali per la versione italiana basati sui nuovi placeholder e classi
+            # 1. Identifichiamo dove si trovano i campi di testo (Page principale o iFrame?)
             user_selector = "input[placeholder*='utente'], input[placeholder*='e-mail'], input[type='text']"
             pass_selector = "input[placeholder*='Password'], input[placeholder*='password'], input[type='password']"
-            
-            page.wait_for_selector(user_selector, timeout=15000)
+            login_btn_selector = "button:has-text('Accedi'), button[type='submit'], .login-btn"
 
-            # METODO DI FORZATURA JS: Inietta il testo direttamente nell'elemento DOM per evitare blocchi grafici
-            page.evaluate(f"""
-                (userSel, passSel, userVal, passVal) => {{
-                    const uField = document.querySelector(userSel);
-                    const pField = document.querySelector(passSel);
-                    if(uField) {{
-                        uField.value = userVal;
-                        uField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        uField.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                    if(pField) {{
-                        pField.value = passVal;
-                        pField.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        pField.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                }}
-            """, user_selector, pass_selector, username, password)
-            
-            page.wait_for_timeout(2000) # Pausa per registrare i dati inseriti
+            target = None
+
+            # Controlliamo prima la pagina principale
+            if page.locator(user_selector).count() > 0:
+                print("[+] Campi rilevati nella pagina principale!")
+                target = page
+            else:
+                # Se non sono sulla pagina principale, cerchiamo in tutti i frame/iframe caricati
+                print("[*] Campi non trovati nella pagina principale. Scansione degli iframe in corso...")
+                for frame in page.frames:
+                    try:
+                        if frame.locator(user_selector).count() > 0:
+                            print(f"[+] Campi individuati con successo all'interno dell'iframe: {frame.name or frame.url}")
+                            target = frame
+                            break
+                    except Exception:
+                        continue
+
+            # Se non abbiamo trovato i campi da nessuna parte, lanciamo un errore per fare lo screenshot di debug
+            if not target:
+                raise Exception("Impossibile trovare i campi di login (user/password) sia nella pagina principale sia negli iframe.")
+
+            # 2. Compilazione dei campi sul target individuato
+            print("[*] Inserimento credenziali sul target...")
+            target.locator(user_selector).first.click()
+            target.locator(user_selector).first.fill(username)
+            page.wait_for_timeout(1000)
+
+            target.locator(pass_selector).first.click()
+            target.locator(pass_selector).first.fill(password)
+            page.wait_for_timeout(1000)
 
             print("[*] Click sul pulsante 'Accedi'...")
-            # Clicca sul vistoso bottone blu che ora riporta il testo "Accedi"
-            login_btn = page.get_by_role("button", name="Accedi").or_(page.locator("button:has-text('Accedi')")).or_(page.locator(".login-btn")).first
-            login_btn.click()
+            target.locator(login_btn_selector).first.click()
             
             print("[*] Attesa reindirizzamento alla dashboard...")
             page.wait_for_url("**/index.html**", timeout=35000)
             print("[+] Login completato con successo!")
 
-            # Estrazione sessione
+            # Estrazione cookie e token
             cookies = context.cookies()
             session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
             
@@ -84,10 +91,10 @@ def get_fusionsolar_session(username, password):
             return session_cookies, xsrf_token
 
         except Exception as e:
-            print(f"[-] Errore durante la sessione italiana: {e}")
+            print(f"[-] Errore durante la sessione: {e}")
             try:
                 page.screenshot(path="error_screenshot.png")
-                print("[*] Screenshot aggiornato salvato.")
+                print("[*] Screenshot di errore salvato.")
             except Exception as screenshot_err:
                 print(f"[-] Impossibile scattare lo screenshot: {screenshot_err}")
             
