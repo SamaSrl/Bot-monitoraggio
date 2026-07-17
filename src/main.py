@@ -45,10 +45,17 @@ def main():
         print("[+] Dati esportati con successo in web_app/data/dashboard.json!")
         
     except Exception as e:
-    print(f"[-] Errore critico durante l'esecuzione: {e}")
-    try:
-        page.screenshot(path="error_screenshot.png")
-        print("[*] Screenshot di errore salvato come error_screenshot.png")
-    except Exception as screenshot_error:
-        print(f"[-] Impossibile salvare lo screenshot: {screenshot_error}")
-    raise e
+        print(f"[-] Errore critico durante l'esecuzione: {e}")
+        # Proviamo a scattare lo screenshot solo se la variabile 'page' esiste ed è accessibile
+        if 'page' in locals() or 'page' in globals():
+            try:
+                page.screenshot(path="error_screenshot.png")
+                print("[*] Screenshot di errore salvato come error_screenshot.png")
+            except Exception as screenshot_error:
+                print(f"[-] Impossibile salvare lo screenshot con page: {screenshot_error}")
+        else:
+            print("[-] Impossibile salvare lo screenshot: l'oggetto 'page' (browser) non è definito in questo modulo.")
+        raise e
+
+if __name__ == "__main__":
+    main()
