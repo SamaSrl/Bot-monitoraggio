@@ -31,7 +31,7 @@ jobs:
     - name: Esegui il Bot di Monitoraggio
       env:
         FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
-        FUSIONSOLAR_PASSWORD: ${{ secrets.FUSIONSOLAR_PASSWORD }}
+        FUSIONSOLAR_PWD: ${{ secrets.FUSIONSOLAR_PASSWORD }}
       run: python src/main.py
 
     - name: Salva e carica i dati aggiornati
