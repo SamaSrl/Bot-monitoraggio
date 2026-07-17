@@ -45,8 +45,12 @@ def main():
         print("[+] Dati esportati con successo in web_app/data/dashboard.json!")
         
     except Exception as e:
-	page.screenshot(path="web_app/data/error_screenshot.png")
-        print(f"[-] Errore critico durante l'esecuzione: {e}")
-
-if __name__ == "__main__":
-    main()
+    # Salva lo screenshot direttamente nella cartella principale del progetto
+    try:
+        page.screenshot(path="error_screenshot.png")
+        print("[*] Screenshot di errore salvato come error_screenshot.png")
+    except Exception as screenshot_error:
+        print(f"[-] Impossibile salvare lo screenshot: {screenshot_error}")
+        
+    print(f"[-] Errore critico durante l'esecuzione: {e}")
+    raise e
