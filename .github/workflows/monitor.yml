@@ -60,4 +60,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: errore-screenshot
-        path: web_app/data/error_screenshot.png
+        path: error_screenshot.png # <--- Modificato qui, rimosso il percorso web_app/data/
