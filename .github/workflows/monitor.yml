@@ -3,7 +3,7 @@ name: FusionSolar Monitor Cron
 on:
   schedule:
     # Gira ogni 30 minuti (orari UTC)
-    - cron: '*/30 * * * *'
+    - cron: '*/120 * * * *'
   workflow_dispatch: # Ti permette di avviarlo manualmente con un clic da GitHub
 
 permissions:
