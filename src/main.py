@@ -45,6 +45,7 @@ def main():
         print("[+] Dati esportati con successo in web_app/data/dashboard.json!")
         
     except Exception as e:
+	page.screenshot(path="web_app/data/error_screenshot.png")
         print(f"[-] Errore critico durante l'esecuzione: {e}")
 
 if __name__ == "__main__":
