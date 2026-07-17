@@ -6,10 +6,10 @@ FUSIONSOLAR_HOST = "https://eu5.fusionsolar.huawei.com"
 
 def get_fusionsolar_session(username, password):
     """
-    Esegue il login simulando l'hardware, seleziona la region004,
-    abbatte eventuali popup di notifica iniziali ed estrae la sessione.
+    Esegue il login usando coordinate hardware stabili per i campi di testo,
+    usa il tasto TAB per selezionare la regione e gestisce la dashboard.
     """
-    print("[*] Avvio del browser in modalità hardware (Region004 + Gestione Popup)...")
+    print("[*] Avvio del browser in modalità simulazione hardware (Fix Regione via TAB)...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -28,52 +28,62 @@ def get_fusionsolar_session(username, password):
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(8000)
 
-            # --- 1. COMPILAZIONE LOGIN VIA HARDWARE ---
+            # --- 1. COMPILAZIONE USERNAME ---
             print("[*] Inserimento Username...")
+            page.mouse.move(850, 400)
             page.mouse.click(850, 400)
+            page.wait_for_timeout(500)
             page.keyboard.type(username, delay=100)
             page.wait_for_timeout(1000)
 
+            # --- 2. COMPILAZIONE PASSWORD ---
             print("[*] Inserimento Password...")
+            page.mouse.move(1070, 400)
             page.mouse.click(1070, 400)
+            page.wait_for_timeout(500)
             page.keyboard.type(password, delay=100)
-            page.wait_for_timeout(4000) 
+            page.wait_for_timeout(3000) # Aspettiamo che appaia visivamente il box region003
 
-            # --- 2. GESTIONE SELEZIONE REGIONE ---
-            print("[*] Apertura menu regione...")
-            page.mouse.click(960, 415)
-            page.wait_for_timeout(1500) 
-
-            print("[*] Selezione forzata di region004...")
-            page.keyboard.type("region004", delay=100)
+            # --- 3. SPOSTAMENTO SU REGIONE VIA TAB ---
+            print("[*] Navigazione sulla tendina della regione tramite tasto TAB...")
+            page.keyboard.press("Tab")
             page.wait_for_timeout(1000)
+            
+            # Inviamo una freccia giù per aprire/attivare il menu
+            page.keyboard.press("ArrowDown")
+            page.wait_for_timeout(1000)
+
+            print("[*] Forzatura scrittura region004...")
+            # Cancelliamo un eventuale valore parziale e scriviamo la regione corretta
+            page.keyboard.type("region004", delay=150)
+            page.wait_for_timeout(1500)
             page.keyboard.press("Enter")
             page.wait_for_timeout(2000)
 
-            # --- 3. CLICK SU ACCEDI ---
-            print("[*] Click sul pulsante 'Accedi'...")
+            # --- 4. CLICK SU ACCEDI VIA COORD/ENTER ---
+            print("[*] Invio del modulo di login...")
+            # Proviamo prima premendo Enter dalla tastiera che è rimasta agganciata al modulo
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1500)
+            
+            # Clic di sicurezza sul pulsante blu a destra (X=1300, Y=400)
+            print("[*] Clic di backup sul pulsante Accedi...")
             page.mouse.click(1300, 400)
             
-            # Attendiamo che la pagina principale si carichi (aspettiamo che appaia il menu superiore)
+            # --- 5. VERIFICA DASHBOARD & POPUP ---
             print("[*] Attesa caricamento della Dashboard...")
             page.wait_for_selector("text=Monitoraggio, text=Impianti, .ant-layout", timeout=45000)
-            print("[+] Accesso alla Dashboard rilevato con successo!")
-            page.wait_for_timeout(3000) # Lasciamo stabilizzare l'interfaccia grafica
+            print("[+] Accesso alla Dashboard confermato!")
+            page.wait_for_timeout(4000)
 
-            # --- 4. ABBATTIMENTO POPUP DI BENVENUTO ---
-            print("[*] Controllo presenza popup 'Aggiornamento della funzione'...")
-            # Cerchiamo il pulsante "Non mostrare di nuovo" o la X di chiusura
+            print("[*] Controllo eventuale popup di benvenuto...")
             btn_chiudi_popup = page.locator("button:has-text('Non mostrare di nuovo'), .ant-modal-close, text=Non mostrare di nuovo").first
-            
             if btn_chiudi_popup.is_visible():
-                print("[+] Popup rilevato! Clicco per chiuderlo...")
+                print("[+] Popup rilevato. Chiusura in corso...")
                 btn_chiudi_popup.click()
                 page.wait_for_timeout(2000)
-            else:
-                print("[*] Nessun popup visibile in primo piano.")
 
-            # --- 5. ESTRAZIONE SESSIONE ---
-            print("[*] Estrazione cookie e token di sicurezza...")
+            # --- 6. ESTRAZIONE cookie ---
             cookies = context.cookies()
             session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
             
@@ -83,15 +93,15 @@ def get_fusionsolar_session(username, password):
                     xsrf_token = cookie['value']
                     break
 
-            print("[+] Sessione catturata ed estratta con successo!")
+            print("[+] Sessione catturata con successo!")
             browser.close()
             return session_cookies, xsrf_token
 
         except Exception as e:
-            print(f"[-] Errore durante la sessione post-login: {e}")
+            print(f"[-] Errore durante la sessione: {e}")
             try:
                 page.screenshot(path="error_screenshot.png")
-                print("[*] Screenshot di debug salvato.")
+                print("[*] Screenshot di controllo salvato.")
             except Exception as screenshot_err:
                 print(f"[-] Impossibile scattare lo screenshot: {screenshot_err}")
             
