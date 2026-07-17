@@ -3,7 +3,7 @@ name: FusionSolar Monitor Cron
 on:
   schedule:
     # Gira ogni 30 minuti (orari UTC)
-    - cron: '*/120 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch: # Ti permette di avviarlo manualmente con un clic da GitHub
 
 permissions:
@@ -35,6 +35,7 @@ jobs:
       run: python src/main.py
 
     - name: Salva e carica i dati aggiornati
+      if: success() # Viene eseguito solo se il bot NON è fallito
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -53,3 +54,10 @@ jobs:
           echo "ERRORE: Il file dashboard.json non è stato generato dal bot!"
           exit 1
         fi
+
+    - name: Upload screenshot di errore
+      if: failure() # Viene eseguito SOLO se lo step del Bot fallisce
+      uses: actions/upload-artifact@v4
+      with:
+        name: errore-screenshot
+        path: web_app/data/error_screenshot.png
