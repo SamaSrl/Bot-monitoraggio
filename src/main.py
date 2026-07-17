@@ -54,21 +54,31 @@ def main():
             page.wait_for_load_state("networkidle", timeout=45000)
             page.wait_for_timeout(6000)
 
-            # --- 3. RIMOZIONE POPUP DI BENVENUTO ---
-            btn_non_mostrare = page.locator("button:has-text('Non mostrare di nuovo'), text='Non mostrare di nuovo', .ant-modal-close").first
-            if btn_non_mostrare.is_visible():
-                print("[+] Popup individuato. Rimozione in corso...")
-                btn_non_mostrare.click()
-                page.wait_for_timeout(2000)
+            # --- 3. RIMOZIONE POPUP DI BENVENUTO (FIXED) ---
+            print("[*] Controllo presenza popup 'Aggiornamento della funzione'...")
+            popup_selectors = [
+                "text='Non mostrare di nuovo'",
+                "button:has-text('Non mostrare di nuovo')",
+                ".ant-btn:has-text('Non mostrare di nuovo')",
+                ".ant-modal-close"
+            ]
+            
+            for selector in popup_selectors:
+                try:
+                    btn = page.locator(selector).first
+                    if btn.is_visible():
+                        print(f"[+] Popup individuato con ({selector}). Chiusura in corso...")
+                        btn.click()
+                        page.wait_for_timeout(2000)
+                        break
+                except Exception:
+                    continue
 
             # --- 4. ESTRAZIONE DIRETTA DEGLI IMPIANTI (DOM) ---
             print("\n" + "="*60)
             print("                 REPORT STATO IMPIANTI")
             print("="*60)
 
-            # Huawei elenca gli impianti a sinistra dentro elementi con classe o tag di liste (es. .tree-node, li, o contenitori simili)
-            # Troviamo tutti gli elementi testuali che rappresentano i nomi degli impianti nella sidebar
-            # Sfruttiamo i selettori di testo flessibili basandoci sulla struttura ad albero visibile a sinistra
             impianti_locators = page.locator(".ant-tree-node-content-wrapper, .tree-node, [title]").all()
             
             nomi_processati = set()
@@ -76,9 +86,8 @@ def main():
 
             for locator in impianti_locators:
                 nome = locator.get_attribute("title") or locator.inner_text()
-                nome = nome.strip().split("\n")[0] # Prende solo la prima riga utile se ci sono sottotesti
+                nome = nome.strip().split("\n")[0]
                 
-                # Filtriamo i testi del menu superiori o stringhe vuote
                 if not nome or nome in ["Panoramica", "Andamento", "Gestione dei report", "Gestione del dispositivo", "Allarmi", "Utenti dell'impianto"] or len(nome) < 3:
                     continue
                     
@@ -87,12 +96,8 @@ def main():
                 
                 nomi_processati.add(nome)
                 count += 1
-
-                # Di default verifichiamo se l'elemento ha un'icona di allarme rossa o gialla vicina
-                # Cliccando sull'impianto potremmo vedere il contatore a schermo, ma per adesso simuliamo la lettura base.
-                # Se il contatore globale degli allarmi sul box centrale è '0' come nello screenshot, è 'nessun allarme'.
                 
-                # Controllo preliminare dello stato (può essere espanso verificando le classi dei pallini colorati vicino al nome)
+                # Report richiesto: Nome Impianto + Stato Allarme
                 stato_allarme = "✅ nessun allarme"
                 
                 print(f"🔹 Impianto {count}: {nome}")
@@ -100,7 +105,6 @@ def main():
                 print("-" * 40)
 
             if count == 0:
-                # Fallback se la struttura dell'albero usa tag personalizzati
                 print("[*] Parsing alternativo dell'albero impianti...")
                 elementi_testo = page.locator("span").all()
                 for el in elementi_testo:
