@@ -18,49 +18,50 @@ def get_fusionsolar_session(username, password):
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/")
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(2000) # Attesa precauzionale per il rendering completo
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle")
+            page.wait_for_timeout(5000) # Forziamo 5 secondi interi per assicurarci che gli script di Huawei siano pronti
 
-            # 1. Gestione Banner dei Cookie (La "X" in fondo a destra)
+            print("[*] Inserimento credenziali con metodo hardware...")
+            
+            # Selettore specifico per il campo Username di FusionSolar
+            user_selector = "input[type='text'], .username-input input, input[placeholder*='User']"
+            page.wait_for_selector(user_selector, timeout=15000)
+            
+            # Forziamo il focus e l'inserimento simulando la tastiera fisica
+            page.focus(user_selector)
+            page.click(user_selector)
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(username, delay=100) # Digita lentamente come un umano
+
+            # Selettore specifico per il campo Password di FusionSolar
+            pass_selector = "input[type='password'], .password-input input, input[placeholder*='Pass']"
+            page.focus(pass_selector)
+            page.click(pass_selector)
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(password, delay=100)
+            
+            print("[*] Invio del modulo di Login...")
+            # Premiamo INVIO direttamente dalla tastiera per evitare di mancare il bottone blu
+            page.keyboard.press("Enter")
+            
+            # Se l'invio con Enter non bastasse, fa anche il click di backup sul bottone
+            page.wait_for_timeout(2000)
             try:
-                cookie_close_button = page.locator("span.cookie-close, .cookie-policy-close, i.cookie-close, svg.cookie-close, [class*='cookie'] .x, [class*='cookie'] button").or_(page.get_by_text("×")).first
-                if cookie_close_button.is_visible(timeout=3000):
-                    print("[*] Rilevato banner dei cookie. Chiusura in corso...")
-                    cookie_close_button.click()
-                    page.wait_for_timeout(1000)
+                page.locator("button[type='submit'], .login-btn, #login-submit, button:has-text('Log In')").first.click(timeout=3000)
             except Exception:
-                print("[*] Nessun banner cookie rilevato o impossibile chiuderlo (procedo comunque).")
+                pass # Se ha già fatto il redirect con Enter, questo fallirà ma andiamo avanti
 
-            print("[*] Inserimento credenziali...")
-            
-            # 2. Individuazione e compilazione robusta del campo Username
-            # Usiamo il testo del placeholder "Username/Email" visibile nello screenshot
-            username_field = page.get_by_placeholder("Username/Email").or_(page.locator("input[type='text']")).first
-            username_field.wait_for(state="visible", timeout=10000)
-            username_field.click() # Clicca per dare il focus
-            username_field.fill(username)
-
-            # 3. Individuazione e compilazione robusta del campo Password
-            password_field = page.get_by_placeholder("Password").or_(page.locator("input[type='password']")).first
-            password_field.click()
-            password_field.fill(password)
-            
-            print("[*] Clic sul pulsante di Login...")
-            # Clicchiamo sul vistoso bottone blu "Log In"
-            login_button = page.get_by_role("button", name="Log In").or_(page.locator("button:has-text('Log In')")).or_(page.locator(".login-btn")).first
-            login_button.click()
-            
-            # Aspettiamo che il browser carichi la pagina principale post-login
+            # Aspettiamo il caricamento della pagina principale post-login
             print("[*] Attesa reindirizzamento alla dashboard...")
-            page.wait_for_url("**/index.html**", timeout=25000)
+            page.wait_for_url("**/index.html**", timeout=30000)
             print("[+] Login completato con successo!")
 
-            # Estraiamo i cookie salvati nel browser
+            # Estraiamo i cookie e il token
             cookies = context.cookies()
             session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
             
-            # Estraiamo l'XSRF-TOKEN
             xsrf_token = ""
             for cookie in cookies:
                 if cookie['name'] == 'XSRF-TOKEN':
@@ -74,7 +75,7 @@ def get_fusionsolar_session(username, password):
             print(f"[-] Errore durante la sessione del browser: {e}")
             try:
                 page.screenshot(path="error_screenshot.png")
-                print("[*] Nuovo screenshot di errore salvato come 'error_screenshot.png'")
+                print("[*] Nuovo screenshot di errore salvato.")
             except Exception as screenshot_err:
                 print(f"[-] Impossibile scattare lo screenshot: {screenshot_err}")
             
