@@ -74,7 +74,8 @@ def get_fusionsolar_session(username, password, extract_errors=True, output_csv=
             print("[+] Accesso alla Dashboard confermato!")
             page.wait_for_timeout(4000)
  
-            # --- 6. GESTIONE POPUP DI BENVENUTO (FIX) ---
+            # --- 6. GESTIONE POPUP DI BENVENUTO E BANNER COOKIE (FIX) ---
+            _close_cookie_banner(page)
             _close_welcome_popup(page)
  
             # --- 7. ESTRAZIONE cookie di sessione ---
@@ -89,7 +90,12 @@ def get_fusionsolar_session(username, password, extract_errors=True, output_csv=
  
             # --- 8. ESTRAZIONE ERRORI/ALLARMI IMPIANTI ---
             if extract_errors:
-                extract_plant_errors(page, output_csv)
+                try:
+                    extract_plant_errors(page, output_csv)
+                except Exception as e:
+                    # Non facciamo fallire l'intera sessione se l'estrazione
+                    # errori fallisce: i cookie sono già stati catturati.
+                    print(f"[-] Estrazione errori fallita (sessione comunque valida): {e}")
  
             browser.close()
             return session_cookies, xsrf_token
@@ -109,28 +115,95 @@ def get_fusionsolar_session(username, password, extract_errors=True, output_csv=
             raise e
  
  
-def _close_welcome_popup(page, timeout_ms=6000):
+def _close_cookie_banner(page, timeout_ms=4000):
     """
-    Chiude il popup di benvenuto se presente. Usa un timeout breve e non
-    lancia eccezione se il popup non compare (a differenza di is_visible()
-    chiamato subito dopo un selettore non trovato, che può sollevare errore).
+    Chiude il banner cookie in basso alla pagina ("Questo sito Web utilizza
+    i cookie..."), se presente. Viene chiuso PRIMA del popup modale, perché
+    può restare visibile e intercettare click successivi (es. in fase di
+    scraping/paginazione della tabella errori).
+    """
+    print("[*] Controllo banner cookie...")
+    try:
+        # Cerchiamo un pulsante di chiusura/accetta vicino al testo del banner
+        banner = page.locator(
+            "text=Questo sito Web utilizza i cookie"
+        ).first
+        banner.wait_for(state="visible", timeout=timeout_ms)
+ 
+        # Proviamo prima un eventuale pulsante esplicito (Accetta/Chiudi/OK)
+        close_btn = page.locator(
+            "button:has-text('Accetta'), button:has-text('Chiudi'), button:has-text('OK'), "
+            ".cookie-consent button, [class*='cookie'] button"
+        ).first
+        try:
+            close_btn.wait_for(state="visible", timeout=2000)
+            close_btn.click(timeout=3000)
+        except Exception:
+            # Fallback: icona "X" generica vicino al banner
+            page.locator("[class*='cookie'] .close, [class*='cookie'] [aria-label='close']").first.click(timeout=3000)
+ 
+        page.wait_for_timeout(500)
+        print("[+] Banner cookie chiuso.")
+    except Exception as e:
+        print(f"[*] Nessun banner cookie rilevato o già chiuso ({type(e).__name__}).")
+ 
+ 
+def _close_welcome_popup(page, timeout_ms=8000, max_attempts=2):
+    """
+    Chiude il popup di benvenuto ("Aggiornamento della funzione") se presente.
+    Usa get_by_role per un match affidabile sul nome accessibile del bottone,
+    verifica che il popup sia EFFETTIVAMENTE scomparso dopo il click, e in
+    caso di fallimento stampa l'errore reale invece di ignorarlo.
     """
     print("[*] Controllo eventuale popup di benvenuto...")
-    popup_selector = (
-        "button:has-text('Non mostrare di nuovo'), "
-        "button:has-text('Non mostrare più'), "
-        ".ant-modal-close, "
-        "text=Non mostrare di nuovo"
-    )
-    try:
-        locator = page.locator(popup_selector).first
-        locator.wait_for(state="visible", timeout=timeout_ms)
-        print("[+] Popup rilevato. Chiusura in corso...")
-        locator.click()
-        page.wait_for_timeout(1500)
-    except Exception:
-        # Nessun popup entro il timeout: si prosegue normalmente
-        print("[*] Nessun popup rilevato (o già chiuso).")
+ 
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # Il modale FusionSolar usa tipicamente ant-design: .ant-modal
+            modal = page.locator(".ant-modal, [role='dialog']").first
+            modal.wait_for(state="visible", timeout=timeout_ms)
+            print(f"[+] Popup rilevato (tentativo {attempt}). Chiusura in corso...")
+        except Exception:
+            print("[*] Nessun popup rilevato (o già chiuso).")
+            return
+ 
+        closed = False
+ 
+        # 1) Bottone "Non mostrare di nuovo" (match sul nome accessibile esatto)
+        try:
+            btn = page.get_by_role("button", name="Non mostrare di nuovo")
+            btn.click(timeout=4000)
+            page.wait_for_timeout(1000)
+            closed = True
+        except Exception as e:
+            print(f"[-] Click su 'Non mostrare di nuovo' fallito: {e}")
+ 
+        # 2) Fallback: icona X di chiusura del modale
+        if not closed:
+            try:
+                page.locator(".ant-modal-close").first.click(timeout=4000, force=True)
+                page.wait_for_timeout(1000)
+                closed = True
+            except Exception as e:
+                print(f"[-] Click su icona di chiusura fallito: {e}")
+ 
+        # 3) Fallback finale: tasto Escape
+        if not closed:
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"[-] Escape fallito: {e}")
+ 
+        # Verifica che il modale sia davvero sparito
+        try:
+            page.locator(".ant-modal, [role='dialog']").first.wait_for(state="hidden", timeout=4000)
+            print("[+] Popup chiuso con successo.")
+            return
+        except Exception:
+            print(f"[-] Popup ancora presente dopo tentativo {attempt}.")
+ 
+    print("[!] Impossibile chiudere il popup dopo tutti i tentativi. Proseguo comunque.")
  
  
 def extract_plant_errors(page, output_csv="errori_impianti.csv"):
