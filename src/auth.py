@@ -6,15 +6,15 @@ FUSIONSOLAR_HOST = "https://eu5.fusionsolar.huawei.com"
 
 def get_fusionsolar_session(username, password):
     """
-    Usa Playwright simulando clic fisici a coordinate per forzare l'attivazione
-    dei campi di login nascosti di FusionSolar.
+    Usa Playwright simulando interazioni hardware pure per inserire le credenziali,
+    aprire la tendina regionale, selezionare la 'region004' e completare il login.
     """
-    print("[*] Avvio del browser in modalità simulazione hardware...")
+    print("[*] Avvio del browser in modalità simulazione hardware (Forzatura Region004)...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         
-        # Fissiamo la risoluzione a 1920x1080 per calcolare precisamente le coordinate
+        # Fissiamo la risoluzione per garantire che le coordinate siano precise al millimetro
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -28,47 +28,63 @@ def get_fusionsolar_session(username, password):
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             
-            print("[*] Attesa rendering completo della pagina...")
-            page.wait_for_timeout(10000) # 10 secondi pieni per essere sicuri che la grafica sia stabile
+            print("[*] Attesa rendering iniziale...")
+            page.wait_for_timeout(8000)
 
-            print("[*] Forzatura attivazione campi tramite clic a coordinate fisiche...")
-            
-            # Con una risoluzione di 1920x1080, la barra bianca del login si trova esattamente al centro orizzontale (X ~ 960)
-            # e leggermente sopra la metà verticale (Y ~ 400).
-            # Muoviamo il mouse e clicchiamo lì per "svegliare" l'input dell'utente.
+            # --- FASE 1: INSERIMENTO USERNAME ---
+            print("[*] Compilazione campo Username...")
             page.mouse.move(850, 400)
             page.mouse.click(850, 400)
-            page.wait_for_timeout(1000)
-            
-            # Proviamo a digitare direttamente con la tastiera hardware nel punto cliccato
-            print("[*] Digitazione username via hardware...")
+            page.wait_for_timeout(500)
             page.keyboard.type(username, delay=100)
             page.wait_for_timeout(1000)
 
-            # Ci spostiamo leggermente a destra sulla stessa barra per attivare la password (X ~ 1070)
+            # --- FASE 2: INSERIMENTO PASSWORD ---
+            print("[*] Compilazione campo Password...")
             page.mouse.move(1070, 400)
             page.mouse.click(1070, 400)
-            page.wait_for_timeout(1000)
-            
-            print("[*] Digitazione password via hardware...")
+            page.wait_for_timeout(500)
             page.keyboard.type(password, delay=100)
+            
+            # --- FASE 3: ATTESA E APERTURA TENDINA REGIONE ---
+            print("[*] Attesa comparsa selettore regionale...")
+            page.wait_for_timeout(4000) # Tempo necessario affinché compaia il box "region003" sotto i campi
+
+            print("[*] Clic sul menu a tendina della regione...")
+            # Basandoci sullo screenshot, il box della regione si trova centrato orizzontalmente sotto i campi
+            # Coordinate stimate: X=960 (centro dello schermo), Y=415 (subito sotto la barra di login)
+            page.mouse.move(960, 415)
+            page.mouse.click(960, 415)
+            page.wait_for_timeout(1500) # Aspettiamo che la tendina si apra graficamente
+
+            # --- FASE 4: SELEZIONE DI REGION004 ---
+            print("[*] Tentativo di digitazione diretta della regione...")
+            # Spesso queste tendine permettono di cercare scrivendo. Proviamo a digitare "region004"
+            page.keyboard.type("region004", delay=100)
+            page.wait_for_timeout(1000)
+            page.keyboard.press("Enter")
             page.wait_for_timeout(1000)
 
-            print("[*] Invio del modulo tramite tasto Enter...")
+            # Come metodo di backup se la digitazione non ha filtrato, usiamo le frecce direzionali
+            # (Solitamente premendo Freccia Giù una o due volte ci si sposta tra le opzioni disponibili)
+            print("[*] Invio comandi di navigazione da tastiera per sicurezza...")
+            page.keyboard.press("ArrowDown")
+            page.wait_for_timeout(500)
             page.keyboard.press("Enter")
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2000)
 
-            # Clic di backup sul pulsante blu "Accedi" (si trova a destra della barra, X ~ 1300, Y ~ 400)
-            try:
-                page.mouse.click(1300, 400)
-            except Exception:
-                pass
-
+            # --- FASE 5: CLIC SU ACCEDI ---
+            print("[*] Clic sul pulsante 'Accedi'...")
+            # Il pulsante blu "Accedi" si trova a destra (X=1300, Y=400)
+            page.mouse.move(1300, 400)
+            page.mouse.click(1300, 400)
+            
             print("[*] Attesa reindirizzamento alla dashboard...")
-            page.wait_for_url("**/index.html**", timeout=35000)
-            print("[+] Login completato con successo!")
+            # Monitoriamo sia l'URL che eventuali cambiamenti di pagina
+            page.wait_for_url("**/index.html**", timeout=40000)
+            print("[+] Login completato con successo su region004!")
 
-            # Estrazione sessione
+            # Estrazione cookie e token di sessione
             cookies = context.cookies()
             session_cookies = {cookie['name']: cookie['value'] for cookie in cookies}
             
@@ -85,7 +101,7 @@ def get_fusionsolar_session(username, password):
             print(f"[-] Errore durante la sessione hardware: {e}")
             try:
                 page.screenshot(path="error_screenshot.png")
-                print("[*] Screenshot aggiornato salvato.")
+                print("[*] Nuovo screenshot di errore salvato in 'error_screenshot.png'.")
             except Exception as screenshot_err:
                 print(f"[-] Impossibile scattare lo screenshot: {screenshot_err}")
             
