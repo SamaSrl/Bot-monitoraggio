@@ -11,7 +11,7 @@ def main():
         print("[-] Errore: Password non trovata nei segreti di GitHub (FUSIONSOLAR_PWD).")
         return
 
-    print("[*] Avvio del Bot per estrazione mirata della barra laterale impianti...")
+    print("[*] Avvio Bot Monitoraggio FusionSolar...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -49,11 +49,11 @@ def main():
             page.mouse.click(1300, 400)
             
             # --- 2. ATTESA SCHERMATA PRINCIPALE ---
-            print("[*] Attesa stabilizzazione della Dashboard...")
+            print("[*] Attesa caricamento Dashboard...")
             page.wait_for_load_state("networkidle", timeout=45000)
             page.wait_for_timeout(8000)
 
-            # --- 3. RIMOZIONE POPUP DI BENVENUTO ---
+            # --- 3. RIMOZIONE POPUP ---
             popup_selectors = ["text='Non mostrare di nuovo'", "button:has-text('Non mostrare di nuovo')", ".ant-modal-close"]
             for selector in popup_selectors:
                 try:
@@ -65,14 +65,13 @@ def main():
                 except Exception:
                     continue
 
-            # --- 4. ESTRAZIONE TARGETIZZATA DEGLI IMPIANTI ---
-            print("[*] Analisi approfondita della barra laterale...")
+            # --- 4. SCROLL DELLA LISTA & SCANSIONE IMPIANTI ---
+            print("[*] Avvio scansione dinamica con scroll della lista...")
             
-            nomi_impianti = []
+            impianti_trovati = {}  # Dizionario {NomeImpianto: Stato}
             
-            # Metodo 1: Cerchiamo tutti gli elementi che hanno un attributo 'title' o testo visibile nella colonna di sinistra
-            # La barra laterale di FusionSolar di solito risiede dentro un div/aside a sinistra (X < 400px)
-            elementi_visibili = page.locator("span, div, a, li").all()
+            # Posizioniamo il mouse sopra il pannello sinistro (es. coordinate X=150, Y=300) per attivare lo scroll
+            page.mouse.move(150, 300)
             
             esclusi = [
                 "Panoramica", "Layout", "Andamento", "Gestione dei report", "Gestione del dispositivo", 
@@ -81,56 +80,69 @@ def main():
                 "Sistema", "Kiosk", "Inserisci un nome dispositivo", "Prova la nuova versione"
             ]
 
-            for el in elementi_visibili:
-                try:
-                    # Verifichiamo la posizione dell'elemento: deve trovarsi nella metà sinistra dello schermo (X < 350)
-                    box = el.bounding_box()
-                    if not box or box['x'] > 350 or box['width'] == 0:
+            # Effettuiamo più passaggi di scroll per caricare tutta la virtual list
+            for i in range(10):
+                # Cerchiamo gli elementi visibili nella sidebar
+                elementi = page.locator(".ant-tree-title, .ant-tree-node-content-wrapper, [title]").all()
+                
+                for el in elementi:
+                    try:
+                        box = el.bounding_box()
+                        if not box or box['x'] > 380 or box['width'] == 0:
+                            continue
+
+                        # Estraiamo il nome dell'impianto
+                        title_attr = el.get_attribute("title") or ""
+                        text_content = el.inner_text().strip()
+                        nome = (title_attr if title_attr else text_content).split("\n")[0].strip()
+
+                        if nome and len(nome) > 2 and nome not in esclusi:
+                            if nome not in impianti_trovati:
+                                # Verifichiamo lo stato dell'icona/pallino vicino all'impianto
+                                html_nodo = el.inner_html().lower()
+                                parent_html = el.locator("xpath=..").inner_html().lower()
+                                
+                                stato = "✅ OK"
+                                if "red" in parent_html or "alarm" in parent_html or "fail" in parent_html or "errore" in parent_html:
+                                    stato = "🚨 ALLARME CRITICO"
+                                elif "yellow" in parent_html or "warn" in parent_html:
+                                    stato = "⚠️ AVVISO"
+                                elif "gray" in parent_html or "offline" in parent_html or "disconnesso" in parent_html:
+                                    stato = "⚪ OFFLINE"
+
+                                impianti_trovati[nome] = stato
+                    except Exception:
                         continue
+                
+                # Scroll verso il basso con la rotellina del mouse sulla colonna sinistra
+                page.mouse.wheel(0, 400)
+                page.wait_for_timeout(1000)
 
-                    # Estraiamo sia l'attributo title sia il testo interno
-                    title_attr = el.get_attribute("title") or ""
-                    inner_text = el.inner_text().strip()
-                    
-                    testo_candidato = title_attr if title_attr else inner_text
-                    clean_text = testo_candidato.split("\n")[0].strip()
-
-                    # Controlliamo che sia un nome valido e non una voce di menu
-                    if clean_text and len(clean_text) > 2 and clean_text not in esclusi:
-                        # Verifichiamo che non sia già stato aggiunto
-                        if clean_text not in nomi_impianti:
-                            nomi_impianti.append(clean_text)
-                except Exception:
-                    continue
-
-            # --- 5. GENERAZIONE DEL FILE DI REPORT ---
+            # --- 5. GENERAZIONE REPORT ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
-            report_content += "Questo file viene aggiornato automaticamente dal bot ad ogni esecuzione.\n\n"
-            report_content += "| # | Nome Impianto | Stato Allarme |\n"
-            report_content += "|---|----------------|---------------|\n"
+            report_content += "Questo file viene aggiornato automaticamente ad ogni esecuzione.\n\n"
+            report_content += "| # | Nome Impianto | Stato |\n"
+            report_content += "|---|----------------|-------|\n"
 
             print("\n" + "="*60)
             print("                 REPORT STATO IMPIANTI")
             print("="*60)
 
-            if nomi_impianti:
-                for idx, nome in enumerate(nomi_impianti, 1):
-                    stato_allarme = "✅ nessun allarme"
+            if impianti_trovati:
+                for idx, (nome, stato) in enumerate(impianti_trovati.items(), 1):
                     print(f"🔹 Impianto {idx}: {nome}")
-                    print(f"   Stato:      {stato_allarme}")
+                    print(f"   Stato:      {stato}")
                     print("-" * 40)
-                    report_content += f"| {idx} | **{nome}** | {stato_allarme} |\n"
+                    report_content += f"| {idx} | **{nome}** | {stato} |\n"
             else:
-                print("[-] Nessun impianto rilevato con le coordinate X < 350. Controllo in corso...")
                 report_content += "| - | *Nessun impianto rilevato* | - |\n"
 
             print("="*60)
-            print(f"[+] Trovati ed elaborati {len(nomi_impianti)} impianti.")
+            print(f"[+] Trovati ed elaborati {len(impianti_trovati)} impianti in totale.")
 
-            # Salviamo il file
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
-            print("[+] File REPORT_ALLARMI.md generato e salvato!")
+            print("[+] File REPORT_ALLARMI.md salvato con successo!")
 
             browser.close()
 
