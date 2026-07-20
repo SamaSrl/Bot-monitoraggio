@@ -26,13 +26,10 @@ def main():
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(5000)
 
-            # --- 1. LOGIN VIRTUALIZZATO ROBUSTO ---
-            print("[*] Esecuzione Login...")
+            # --- 1. LOGIN ---
+            print("[*] Compilazione credenziali...")
             
-            # Utilizziamo il nome esatto scoperto dai log: ssoCredentials.username
             user_field = page.locator("input[name='ssoCredentials.username'], input[type='text']").first
-            
-            # Se il campo non è immediatamente visibile, forziamo un click/focus
             if not user_field.is_visible():
                 page.mouse.click(850, 400)
                 page.wait_for_timeout(500)
@@ -75,39 +72,33 @@ def main():
                 except Exception:
                     continue
 
-            # --- 4. SCANSIONE ED ESTRAZIONE IMPIANTI REALI ---
+            # --- 4. SCANSIONE IMPIANTI ---
             print("[*] Avvio scansione mirata della colonna impianti...")
             
             impianti_trovati = {}
-            
             blacklist = [
                 "fusionsolar", "massimo soncin", "normale", "gestione energia", 
                 "generata da fv:", "consumata (kwh)", "0,00 kwh", "kwh", "panoramica", 
                 "layout", "andamento", "gestione dei report", "gestione del dispositivo", 
                 "allarmi", "utenti dell'impianto", "resa di oggi", "consumo di oggi", 
                 "autoconsumo", "resa totale", "home", "monitoraggio", "report", "impianti", 
-                "servizi a valore aggiunto", "sistema", "kiosk", "inserisci un nome dispositivo",
-                "prova la nuova versione", "maggiori informazioni"
+                "servizi a valore aggiunto", "sistema", "kiosk", "inserisci un nome dispositivo"
             ]
 
-            # Spostiamo il mouse sull'area della sidebar (X=150, Y=300) per attivare lo scroll
             page.mouse.move(150, 300)
 
-            for step in range(10):
-                # Selettore specifico dell'albero laterale
+            for step in range(8):
                 nodi = page.locator(".ant-tree-node-content-wrapper, .ant-tree-title, [title]").all()
                 
                 for nod in nodi:
                     try:
                         box = nod.bounding_box()
-                        # Dobbiamo trovarci esclusivamente nella colonna di sinistra
                         if not box or box['x'] > 350 or box['width'] == 0:
                             continue
 
                         title_attr = nod.get_attribute("title") or ""
                         text_val = nod.inner_text().strip()
-                        nome_raw = title_attr if title_attr else text_val
-                        nome = nome_raw.split("\n")[0].strip()
+                        nome = (title_attr if title_attr else text_val).split("\n")[0].strip()
 
                         if nome and len(nome) > 2 and not any(bad in nome.lower() for bad in blacklist):
                             if nome not in impianti_trovati:
@@ -125,9 +116,12 @@ def main():
                     except Exception:
                         continue
 
-                # Scroll graduale verso il basso per caricare tutti gli elementi
                 page.mouse.wheel(0, 350)
                 page.wait_for_timeout(800)
+
+            # SALVA LO SCREENSHOT DELLA SCHERMATA FINALE
+            page.screenshot(path="dashboard_check.png")
+            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
 
             # --- 5. GENERAZIONE REPORT MD ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
@@ -135,31 +129,20 @@ def main():
             report_content += "| # | Nome Impianto | Stato |\n"
             report_content += "|---|----------------|-------|\n"
 
-            print("\n" + "="*60)
-            print("                 REPORT STATO IMPIANTI")
-            print("="*60)
-
             if impianti_trovati:
                 for idx, (nome, stato) in enumerate(impianti_trovati.items(), 1):
-                    print(f"🔹 Impianto {idx}: {nome}")
-                    print(f"   Stato:      {stato}")
-                    print("-" * 40)
                     report_content += f"| {idx} | **{nome}** | {stato} |\n"
             else:
                 report_content += "| - | *Nessun impianto rilevato* | - |\n"
 
-            print("="*60)
-            print(f"[+] Trovati {len(impianti_trovati)} impianti reali.")
-
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
-            print("[+] File REPORT_ALLARMI.md salvato con successo!")
 
             browser.close()
 
         except Exception as e:
             print(f"[-] Errore durante l'estrazione dati: {e}")
-            page.screenshot(path="error_data_screenshot.png")
+            page.screenshot(path="dashboard_check.png")
             browser.close()
             raise e
 
