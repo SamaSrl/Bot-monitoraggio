@@ -27,8 +27,7 @@ def main():
             page.wait_for_timeout(5000)
 
             # --- 1. LOGIN ---
-            print("[*] Compilazione credenziali...")
-            
+            print("[*] Compilazione login...")
             user_field = page.locator("input[name='ssoCredentials.username'], input[type='text']").first
             if not user_field.is_visible():
                 page.mouse.click(850, 400)
@@ -41,7 +40,7 @@ def main():
             pwd_field.fill(PASSWORD, force=True)
             page.wait_for_timeout(1000)
 
-            # Selezione Server Region via TAB
+            # Selezione Region
             page.keyboard.press("Tab")
             page.wait_for_timeout(500)
             page.keyboard.press("ArrowDown")
@@ -51,14 +50,13 @@ def main():
             page.keyboard.press("Enter")
             page.wait_for_timeout(1000)
 
-            # Invio login
             page.keyboard.press("Enter")
             page.mouse.click(1300, 400)
             
             # --- 2. ATTESA SCHERMATA PRINCIPALE ---
             print("[*] Attesa stabilizzazione Dashboard...")
             page.wait_for_load_state("networkidle", timeout=45000)
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(10000)
 
             # --- 3. RIMOZIONE POPUP ---
             popup_selectors = ["text='Non mostrare di nuovo'", "button:has-text('Non mostrare di nuovo')", ".ant-modal-close"]
@@ -73,7 +71,7 @@ def main():
                     continue
 
             # --- 4. SCANSIONE IMPIANTI ---
-            print("[*] Avvio scansione mirata della colonna impianti...")
+            print("[*] Avvio scansione colonna impianti...")
             
             impianti_trovati = {}
             blacklist = [
@@ -88,12 +86,12 @@ def main():
             page.mouse.move(150, 300)
 
             for step in range(8):
-                nodi = page.locator(".ant-tree-node-content-wrapper, .ant-tree-title, [title]").all()
+                nodi = page.locator(".ant-tree-node-content-wrapper, .ant-tree-title, .nle-tree-node, [role='treeitem'], [title]").all()
                 
                 for nod in nodi:
                     try:
                         box = nod.bounding_box()
-                        if not box or box['x'] > 350 or box['width'] == 0:
+                        if not box or box['x'] > 380 or box['width'] == 0:
                             continue
 
                         title_attr = nod.get_attribute("title") or ""
@@ -119,9 +117,9 @@ def main():
                 page.mouse.wheel(0, 350)
                 page.wait_for_timeout(800)
 
-            # SALVA LO SCREENSHOT DELLA SCHERMATA FINALE
+            # SALVA SCREENSHOT GARANTITO
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+            print("[+] Screenshot 'dashboard_check.png' salvato con successo.")
 
             # --- 5. GENERAZIONE REPORT MD ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
@@ -138,10 +136,11 @@ def main():
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
 
+            print(f"[+] Generato REPORT_ALLARMI.md con {len(impianti_trovati)} impianti.")
             browser.close()
 
         except Exception as e:
-            print(f"[-] Errore durante l'estrazione dati: {e}")
+            print(f"[-] Errore durante l'esecuzione: {e}")
             page.screenshot(path="dashboard_check.png")
             browser.close()
             raise e
