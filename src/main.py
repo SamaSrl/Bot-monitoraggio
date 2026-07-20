@@ -65,28 +65,43 @@ def main():
                 except Exception:
                     continue
 
-            # --- 4. ESTRAZIONE TARGETIZZATA DELLA BARRA LATERALE SINISTRA ---
-            print("[*] Analisi selettiva della colonna sinistra degli impianti...")
-            
-            # Per evitare di leggere i titoli dei riquadri centrali, cerchiamo solo i testi contenuti
-            # all'interno dei nodi dell'albero laterale di sinistra (solitamente classi .ant-tree-* o liste nidificate)
-            # Tagliamo fuori la dashboard centrale cercando elementi dentro l'area del menu/albero dei dispositivi
-            sidebar_items = page.locator(".ant-tree-title, .tree-text, .ant-tree-node-content-wrapper").all()
+            # --- 4. ESTRAZIONE TARGETIZZATA DEGLI IMPIANTI ---
+            print("[*] Analisi approfondita della barra laterale...")
             
             nomi_impianti = []
-            esclusi = ["Panoramica", "Andamento", "Gestione dei report", "Gestione del dispositivo", "Allarmi", "Utenti dell'impianto", "Resa di oggi", "Consumo di oggi", "Autoconsumo", "Resa totale"]
+            
+            # Metodo 1: Cerchiamo tutti gli elementi che hanno un attributo 'title' o testo visibile nella colonna di sinistra
+            # La barra laterale di FusionSolar di solito risiede dentro un div/aside a sinistra (X < 400px)
+            elementi_visibili = page.locator("span, div, a, li").all()
+            
+            esclusi = [
+                "Panoramica", "Layout", "Andamento", "Gestione dei report", "Gestione del dispositivo", 
+                "Allarmi", "Utenti dell'impianto", "Resa di oggi", "Consumo di oggi", "Autoconsumo", 
+                "Resa totale", "Home", "Monitoraggio", "Report", "Impianti", "Servizi a valore aggiunto", 
+                "Sistema", "Kiosk", "Inserisci un nome dispositivo", "Prova la nuova versione"
+            ]
 
-            for item in sidebar_items:
-                text = item.inner_text().strip()
-                # Pulizia da eventuali righe multiple o spazi vuoti
-                if not text:
+            for el in elementi_visibili:
+                try:
+                    # Verifichiamo la posizione dell'elemento: deve trovarsi nella metà sinistra dello schermo (X < 350)
+                    box = el.bounding_box()
+                    if not box or box['x'] > 350 or box['width'] == 0:
+                        continue
+
+                    # Estraiamo sia l'attributo title sia il testo interno
+                    title_attr = el.get_attribute("title") or ""
+                    inner_text = el.inner_text().strip()
+                    
+                    testo_candidato = title_attr if title_attr else inner_text
+                    clean_text = testo_candidato.split("\n")[0].strip()
+
+                    # Controlliamo che sia un nome valido e non una voce di menu
+                    if clean_text and len(clean_text) > 2 and clean_text not in esclusi:
+                        # Verifichiamo che non sia già stato aggiunto
+                        if clean_text not in nomi_impianti:
+                            nomi_impianti.append(clean_text)
+                except Exception:
                     continue
-                clean_text = text.split("\n")[0].strip()
-                
-                # Filtro di sicurezza per catturare solo i veri impianti (quelli che contengono parole chiave dei tuoi impianti come Cimolai, R.C., srl, ecc.)
-                if any(k in clean_text for k in ["Cimolai", "R.C.", "srl", "Armando", "Meleto", "Roberto", "Technology", "Poseido", "Zeus"]):
-                    if clean_text not in nomi_impianti:
-                        nomi_impianti.append(clean_text)
 
             # --- 5. GENERAZIONE DEL FILE DI REPORT ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
@@ -98,22 +113,24 @@ def main():
             print("                 REPORT STATO IMPIANTI")
             print("="*60)
 
-            for idx, nome in enumerate(nomi_impianti, 1):
-                stato_allarme = "✅ nessun allarme"
-                print(f"🔹 Impianto {idx}: {nome}")
-                print(f"   Stato:      {stato_allarme}")
-                print("-" * 40)
-                
-                # Aggiungiamo la riga alla tabella del file
-                report_content += f"| {idx} | **{nome}** | {stato_allarme} |\n"
+            if nomi_impianti:
+                for idx, nome in enumerate(nomi_impianti, 1):
+                    stato_allarme = "✅ nessun allarme"
+                    print(f"🔹 Impianto {idx}: {nome}")
+                    print(f"   Stato:      {stato_allarme}")
+                    print("-" * 40)
+                    report_content += f"| {idx} | **{nome}** | {stato_allarme} |\n"
+            else:
+                print("[-] Nessun impianto rilevato con le coordinate X < 350. Controllo in corso...")
+                report_content += "| - | *Nessun impianto rilevato* | - |\n"
 
             print("="*60)
             print(f"[+] Trovati ed elaborati {len(nomi_impianti)} impianti.")
 
-            # Salviamo fisicamente il file nel workspace
+            # Salviamo il file
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
-            print("[+] File REPORT_ALLARMI.md generato con successo!")
+            print("[+] File REPORT_ALLARMI.md generato e salvato!")
 
             browser.close()
 
