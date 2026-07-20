@@ -65,58 +65,64 @@ def main():
                 except Exception:
                     continue
 
-            # --- 4. SCROLL DELLA LISTA & SCANSIONE IMPIANTI ---
-            print("[*] Avvio scansione dinamica con scroll della lista...")
+            # --- 4. ESTRAZIONE PULITA DEGLI IMPIANTI ---
+            print("[*] Scansione mirata dell'albero degli impianti...")
             
-            impianti_trovati = {}  # Dizionario {NomeImpianto: Stato}
+            impianti_trovati = {}
             
-            # Posizioniamo il mouse sopra il pannello sinistro (es. coordinate X=150, Y=300) per attivare lo scroll
-            page.mouse.move(150, 300)
-            
-            esclusi = [
-                "Panoramica", "Layout", "Andamento", "Gestione dei report", "Gestione del dispositivo", 
-                "Allarmi", "Utenti dell'impianto", "Resa di oggi", "Consumo di oggi", "Autoconsumo", 
-                "Resa totale", "Home", "Monitoraggio", "Report", "Impianti", "Servizi a valore aggiunto", 
-                "Sistema", "Kiosk", "Inserisci un nome dispositivo", "Prova la nuova versione"
+            # Parole da ignorare categoricamente
+            blacklist = [
+                "fusionsolar", "massimo soncin", "normale", "gestione energia", 
+                "generata da fv:", "consumata (kwh)", "0,00 kwh", "kwh", "panoramica", 
+                "layout", "andamento", "gestione dei report", "gestione del dispositivo", 
+                "allarmi", "utenti dell'impianto", "resa di oggi", "consumo di oggi", 
+                "autoconsumo", "resa totale", "home", "monitoraggio", "report", "impianti", 
+                "servizi a valore aggiunto", "sistema", "kiosk", "inserisci un nome dispositivo", 
+                "prova la nuova versione", "maggiori informazioni", "logout"
             ]
 
-            # Effettuiamo più passaggi di scroll per caricare tutta la virtual list
-            for i in range(10):
-                # Cerchiamo gli elementi visibili nella sidebar
-                elementi = page.locator(".ant-tree-title, .ant-tree-node-content-wrapper, [title]").all()
+            # Spostiamo il mouse sull'area dell'albero (X=150, Y=300) per lo scroll
+            page.mouse.move(150, 300)
+
+            for step in range(8):
+                # Selettore specifico per i soli nodi dell'albero impianti
+                nodi = page.locator(".ant-tree-node-content-wrapper, .ant-tree-title, .tree-node-title").all()
                 
-                for el in elementi:
+                for nod in nodi:
                     try:
-                        box = el.bounding_box()
-                        if not box or box['x'] > 380 or box['width'] == 0:
+                        box = nod.bounding_box()
+                        # Deve essere nella barra laterale sinistra e avere dimensioni valide
+                        if not box or box['x'] > 350 or box['width'] == 0:
                             continue
 
-                        # Estraiamo il nome dell'impianto
-                        title_attr = el.get_attribute("title") or ""
-                        text_content = el.inner_text().strip()
-                        nome = (title_attr if title_attr else text_content).split("\n")[0].strip()
+                        # Estraiamo il titolo o il testo del nodo
+                        title_attr = nod.get_attribute("title") or ""
+                        text_val = nod.inner_text().strip()
+                        nome_raw = title_attr if title_attr else text_val
+                        nome = nome_raw.split("\n")[0].strip()
 
-                        if nome and len(nome) > 2 and nome not in esclusi:
-                            if nome not in impianti_trovati:
-                                # Verifichiamo lo stato dell'icona/pallino vicino all'impianto
-                                html_nodo = el.inner_html().lower()
-                                parent_html = el.locator("xpath=..").inner_html().lower()
-                                
-                                stato = "✅ OK"
-                                if "red" in parent_html or "alarm" in parent_html or "fail" in parent_html or "errore" in parent_html:
-                                    stato = "🚨 ALLARME CRITICO"
-                                elif "yellow" in parent_html or "warn" in parent_html:
-                                    stato = "⚠️ AVVISO"
-                                elif "gray" in parent_html or "offline" in parent_html or "disconnesso" in parent_html:
-                                    stato = "⚪ OFFLINE"
+                        # Validazione strict
+                        if nome and len(nome) > 2:
+                            if not any(bad in nome.lower() for bad in blacklist):
+                                if nome not in impianti_trovati:
+                                    # Analisi presenza allarme nel nodo padre
+                                    parent_html = nod.locator("xpath=..").inner_html().lower()
+                                    
+                                    stato = "✅ OK"
+                                    if "red" in parent_html or "alarm" in parent_html or "fail" in parent_html:
+                                        stato = "🚨 ALLARME CRITICO"
+                                    elif "yellow" in parent_html or "warn" in parent_html:
+                                        stato = "⚠️ AVVISO"
+                                    elif "gray" in parent_html or "offline" in parent_html:
+                                        stato = "⚪ OFFLINE"
 
-                                impianti_trovati[nome] = stato
+                                    impianti_trovati[nome] = stato
                     except Exception:
                         continue
-                
-                # Scroll verso il basso con la rotellina del mouse sulla colonna sinistra
-                page.mouse.wheel(0, 400)
-                page.wait_for_timeout(1000)
+
+                # Scroll verso il basso per caricare altri impianti della lista
+                page.mouse.wheel(0, 350)
+                page.wait_for_timeout(800)
 
             # --- 5. GENERAZIONE REPORT ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
@@ -135,10 +141,10 @@ def main():
                     print("-" * 40)
                     report_content += f"| {idx} | **{nome}** | {stato} |\n"
             else:
-                report_content += "| - | *Nessun impianto rilevato* | - |\n"
+                report_content += "| - | *Nessun impianto valido rilevato* | - |\n"
 
             print("="*60)
-            print(f"[+] Trovati ed elaborati {len(impianti_trovati)} impianti in totale.")
+            print(f"[+] Trovati {len(impianti_trovati)} impianti reali.")
 
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
