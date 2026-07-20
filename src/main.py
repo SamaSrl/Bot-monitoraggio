@@ -24,46 +24,46 @@ def main():
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(5000)
 
-            # --- 1. LOGIN CON SELETTORI DIRETTI (NO COORDINATE RIGIDE) ---
-            print("[*] Compilazione form di login...")
+            # --- 1. LOGIN VIRTUALIZZATO ROBUSTO ---
+            print("[*] Esecuzione Login...")
             
-            # Cerca il campo username tra i selettori tipici di FusionSolar
-            user_input = page.locator("input[type='text'], input[placeholder*='Username'], input[placeholder*='Account'], input[placeholder*='utente']").first
-            user_input.fill(USERNAME)
+            # Utilizziamo il nome esatto scoperto dai log: ssoCredentials.username
+            user_field = page.locator("input[name='ssoCredentials.username'], input[type='text']").first
+            
+            # Se il campo non è immediatamente visibile, forziamo un click/focus
+            if not user_field.is_visible():
+                page.mouse.click(850, 400)
+                page.wait_for_timeout(500)
+                
+            user_field.fill(USERNAME, force=True)
             page.wait_for_timeout(500)
 
-            # Cerca il campo password
-            pwd_input = page.locator("input[type='password']").first
-            pwd_input.fill(PASSWORD)
+            pwd_field = page.locator("input[name='ssoCredentials.password'], input[type='password']").first
+            pwd_field.fill(PASSWORD, force=True)
+            page.wait_for_timeout(1000)
+
+            # Selezione Server Region via TAB
+            page.keyboard.press("Tab")
             page.wait_for_timeout(500)
+            page.keyboard.press("ArrowDown")
+            page.wait_for_timeout(500)
+            page.keyboard.type("region004", delay=50)
+            page.wait_for_timeout(1000)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1000)
 
-            # Selezione server/regione se presente il menu a tendina
-            try:
-                dropdown = page.locator(".ant-select, .select-region, .region-select").first
-                if dropdown.is_visible():
-                    dropdown.click()
-                    page.wait_for_timeout(500)
-                    page.keyboard.type("region004", delay=50)
-                    page.wait_for_timeout(500)
-                    page.keyboard.press("Enter")
-            except Exception:
-                pass
-
-            # Click sul pulsante Accedi/Login
-            login_btn = page.locator("button:has-text('Accedi'), button:has-text('Log In'), button[type='submit'], .login-btn").first
-            login_btn.click()
-            print("[*] Credenziali inviate. Attesa caricamento dashboard...")
-
+            # Invio login
+            page.keyboard.press("Enter")
+            page.mouse.click(1300, 400)
+            
+            # --- 2. ATTESA SCHERMATA PRINCIPALE ---
+            print("[*] Attesa stabilizzazione Dashboard...")
             page.wait_for_load_state("networkidle", timeout=45000)
             page.wait_for_timeout(8000)
 
-            # Scattiamo subito uno screenshot per verificare cosa vede realmente il bot dopo il login
-            page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato.")
-
-            # --- 2. RIMOZIONE POPUP DI BENVENUTO ---
+            # --- 3. RIMOZIONE POPUP ---
             popup_selectors = ["text='Non mostrare di nuovo'", "button:has-text('Non mostrare di nuovo')", ".ant-modal-close"]
             for selector in popup_selectors:
                 try:
@@ -75,50 +75,61 @@ def main():
                 except Exception:
                     continue
 
-            # --- 3. SCANSIONE IMPIANTI DAL DOM ---
-            print("[*] Scansione lista impianti...")
+            # --- 4. SCANSIONE ED ESTRAZIONE IMPIANTI REALI ---
+            print("[*] Avvio scansione mirata della colonna impianti...")
             
             impianti_trovati = {}
-
-            # Cerchiamo specificamente gli elementi dell'albero dei dispositivi
-            nodi = page.locator(".ant-tree-title, .ant-tree-node-content-wrapper, [title]").all()
-
+            
             blacklist = [
                 "fusionsolar", "massimo soncin", "normale", "gestione energia", 
                 "generata da fv:", "consumata (kwh)", "0,00 kwh", "kwh", "panoramica", 
                 "layout", "andamento", "gestione dei report", "gestione del dispositivo", 
                 "allarmi", "utenti dell'impianto", "resa di oggi", "consumo di oggi", 
                 "autoconsumo", "resa totale", "home", "monitoraggio", "report", "impianti", 
-                "servizi a valore aggiunto", "sistema", "kiosk", "inserisci un nome dispositivo"
+                "servizi a valore aggiunto", "sistema", "kiosk", "inserisci un nome dispositivo",
+                "prova la nuova versione", "maggiori informazioni"
             ]
 
-            for nod in nodi:
-                try:
-                    box = nod.bounding_box()
-                    if not box or box['x'] > 380 or box['width'] == 0:
+            # Spostiamo il mouse sull'area della sidebar (X=150, Y=300) per attivare lo scroll
+            page.mouse.move(150, 300)
+
+            for step in range(10):
+                # Selettore specifico dell'albero laterale
+                nodi = page.locator(".ant-tree-node-content-wrapper, .ant-tree-title, [title]").all()
+                
+                for nod in nodi:
+                    try:
+                        box = nod.bounding_box()
+                        # Dobbiamo trovarci esclusivamente nella colonna di sinistra
+                        if not box or box['x'] > 350 or box['width'] == 0:
+                            continue
+
+                        title_attr = nod.get_attribute("title") or ""
+                        text_val = nod.inner_text().strip()
+                        nome_raw = title_attr if title_attr else text_val
+                        nome = nome_raw.split("\n")[0].strip()
+
+                        if nome and len(nome) > 2 and not any(bad in nome.lower() for bad in blacklist):
+                            if nome not in impianti_trovati:
+                                parent_html = nod.locator("xpath=..").inner_html().lower()
+                                
+                                stato = "✅ OK"
+                                if "red" in parent_html or "alarm" in parent_html or "fail" in parent_html:
+                                    stato = "🚨 ALLARME CRITICO"
+                                elif "yellow" in parent_html or "warn" in parent_html:
+                                    stato = "⚠️ AVVISO"
+                                elif "gray" in parent_html or "offline" in parent_html:
+                                    stato = "⚪ OFFLINE"
+
+                                impianti_trovati[nome] = stato
+                    except Exception:
                         continue
 
-                    title_attr = nod.get_attribute("title") or ""
-                    text_val = nod.inner_text().strip()
-                    nome = (title_attr if title_attr else text_val).split("\n")[0].strip()
+                # Scroll graduale verso il basso per caricare tutti gli elementi
+                page.mouse.wheel(0, 350)
+                page.wait_for_timeout(800)
 
-                    if nome and len(nome) > 2 and not any(bad in nome.lower() for bad in blacklist):
-                        if nome not in impianti_trovati:
-                            parent_html = nod.locator("xpath=..").inner_html().lower()
-                            
-                            stato = "✅ OK"
-                            if "red" in parent_html or "alarm" in parent_html or "fail" in parent_html:
-                                stato = "🚨 ALLARME CRITICO"
-                            elif "yellow" in parent_html or "warn" in parent_html:
-                                stato = "⚠️ AVVISO"
-                            elif "gray" in parent_html or "offline" in parent_html:
-                                stato = "⚪ OFFLINE"
-
-                            impianti_trovati[nome] = stato
-                except Exception:
-                    continue
-
-            # --- 4. GENERAZIONE REPORT ---
+            # --- 5. GENERAZIONE REPORT MD ---
             report_content = "# 📋 REPORT MONITORAGGIO IMPIANTI FUSIONSOLAR\n\n"
             report_content += "Questo file viene aggiornato automaticamente ad ogni esecuzione.\n\n"
             report_content += "| # | Nome Impianto | Stato |\n"
@@ -138,10 +149,11 @@ def main():
                 report_content += "| - | *Nessun impianto rilevato* | - |\n"
 
             print("="*60)
-            print(f"[+] Trovati {len(impianti_trovati)} impianti.")
+            print(f"[+] Trovati {len(impianti_trovati)} impianti reali.")
 
             with open("REPORT_ALLARMI.md", "w", encoding="utf-8") as f:
                 f.write(report_content)
+            print("[+] File REPORT_ALLARMI.md salvato con successo!")
 
             browser.close()
 
