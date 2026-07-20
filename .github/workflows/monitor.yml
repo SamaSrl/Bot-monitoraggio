@@ -1,66 +1,40 @@
-name: Monitoraggio Impianti FusionSolar
+name: Monitoraggio FusionSolar
 
 on:
-  push:
-    branches:
-      - main
   schedule:
-    # Esegue il bot automaticamente ogni 6 ore (ore 00:00, 06:00, 12:00, 18:00 UTC)
-    - cron: '0 */6 * * *'
-  workflow_dispatch: # Permette l'esecuzione manuale dal pannello di GitHub
+    - cron: '0 6,12,18 * * *'
+  workflow_dispatch:
 
 jobs:
-  run-monitor:
+  monitor:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Scarica il repository
       - name: Checkout del codice
         uses: actions/checkout@v4
 
-      # 2. Configura l'ambiente Python
       - name: Configura Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 3. Installa le dipendenze
       - name: Installa dipendenze
         run: |
           python -m pip install --upgrade pip
-          pip install requests playwright
-          playwright install --with-deps chromium
+          pip install playwright
+          playwright install chromium
+          playwright install-deps
 
-      # 4. Esegue lo script Python
       - name: Esegui il Bot di Monitoraggio
         env:
-          FUSIONSOLAR_USER: "s.agnolet@omniaenergy.eu"
+          FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
           FUSIONSOLAR_PWD: ${{ secrets.FUSIONSOLAR_PWD }}
-        run: |
-          python src/main.py
+        run: python src/main.py
 
-      # 5. Salva e aggiorna il report sul repository
-      - name: Salva e carica i dati aggiornati
-        if: always() # Viene eseguito anche se lo script precedente fallisce per salvare eventuali report parziali
+      - name: Salva e carica i dati aggiornati su GitHub
+        if: always()
         run: |
           git config --global user.name "FusionSolar Bot"
-          git config --global user.email "bot@omniaenergy.eu"
-          
-          # Aggiunge il report generato
-          git add REPORT_ALLARMI.md || true
-          
-          # Aggiunge eventuali screenshot di errore generati durante il crash
-          git add error_data_screenshot.png error_screenshot.png || true
-          
-          # Effettua il commit solo se ci sono modifiche effettive
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiornato report stato impianti [Automazione]" && git push origin main)
-
-      # 6. Carica lo screenshot come Artefatto in caso di errore per un rapido debug
-      - name: Upload screenshot di errore
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-screenshots
-          path: |
-            error_data_screenshot.png
-            error_screenshot.png
+          git config --global user.email "bot@github-actions.local"
+          git add REPORT_ALLARMI.md dashboard_check.png || true
+          git commit -m "Aggiornamento report e screenshot [skip ci]" || true
+          git push origin main || true
