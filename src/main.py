@@ -23,50 +23,59 @@ def main():
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(5000)
 
-            # --- STEP 1: INSERIMENTO USERNAME VIA COORDINATE / TASTIERA ---
-            print("[*] Inserimento Username...")
+            # --- INIETTIAMO I DATI DIRETTAMENTE NEL DOM (Infallibile) ---
+            print("[*] Inserimento credenziali diretto via JS...")
             
-            # Clicchiamo al centro del box dello username (X: 400, Y: 315 alla risoluzione 1920x1080)
-            page.mouse.click(400, 315)
-            page.wait_for_timeout(500)
-            
-            # Puliamo e scriviamo
-            page.keyboard.press("Control+A")
-            page.keyboard.press("Backspace")
-            page.keyboard.type(USERNAME, delay=40)
-            page.wait_for_timeout(500)
+            page.evaluate(f"""
+                () => {{
+                    // Trova il campo username e imposta il valore
+                    const userField = document.querySelector("input[name='ssoCredentials.username']") || document.querySelectorAll("input[type='text']")[0];
+                    if (userField) {{
+                        userField.value = '{USERNAME}';
+                        userField.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        userField.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                    
+                    // Trova il campo password e imposta il valore
+                    const pwdField = document.querySelector("input[name='ssoCredentials.password']") || document.querySelector("input[type='password']");
+                    if (pwdField) {{
+                        pwdField.value = '{PASSWORD}';
+                        pwdField.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        pwdField.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }}
+            """)
+            page.wait_for_timeout(1000)
 
-            # --- STEP 2: INSERIMENTO PASSWORD VIA TAB / COORDINATE ---
-            print("[*] Inserimento Password...")
-            
-            # Clicchiamo al centro del box della password (X: 580, Y: 315)
-            page.mouse.click(580, 315)
-            page.wait_for_timeout(500)
-            
-            page.keyboard.press("Control+A")
-            page.keyboard.press("Backspace")
-            page.keyboard.type(PASSWORD, delay=40)
-            page.wait_for_timeout(500)
-
-            # --- STEP 3: CLICK ACCEDI ---
-            print("[*] Invio credenziali...")
-            
-            # Salviamo prima uno screenshot di controllo per vedere se i dati sono comparsi
+            # Salviamo lo screenshot PER VERIFICARE che i testi siano comparsi nei box!
             page.screenshot(path="pre_login_check.png")
-            
-            # Clicchiamo sul pulsante azzurro 'Accedi' (X: 715, Y: 315)
-            page.mouse.click(715, 315)
+            print("[+] Screenshot 'pre_login_check.png' salvato.")
+
+            # --- PREMIAMO INVIO PER FARE IL LOGIN ---
+            print("[*] Invio Form di Login...")
             page.keyboard.press("Enter")
             
-            print("[*] Attesa risposta dal server...")
-            page.wait_for_timeout(10000)
+            # Tentativo extra: click sul pulsante "Accedi"
+            try:
+                page.evaluate("""
+                    () => {
+                        const btns = Array.from(document.querySelectorAll('button, span, a'));
+                        const loginBtn = btns.find(el => el.textContent.trim() === 'Accedi');
+                        if (loginBtn) loginBtn.click();
+                    }
+                """)
+            except Exception:
+                pass
 
-            # --- STEP 4: SCREENSHOT RISULTATO LOGIN ---
+            print("[*] Attesa reindirizzamento Dashboard...")
+            page.wait_for_timeout(12000)
+
+            # --- SCREENSHOT DELLA PAGINA DOPO IL LOGIN ---
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+            print("[+] Screenshot 'dashboard_check.png' salvato.")
 
             browser.close()
 
