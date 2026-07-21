@@ -36,31 +36,32 @@ def main():
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(4000)
 
-            # Cerca il frame corretto di UniSSO
+            # Individua il frame UniSSO
             target = page
             for frame in page.frames:
                 if "unisso" in frame.url or frame.locator("input[type='password']").count() > 0:
                     target = frame
-                    print(f"[+] Trovato frame dedicato: {frame.url}")
+                    print(f"[+] Frame UniSSO agganciato: {frame.url}")
                     break
 
-            # --- 1. USERNAME ---
+            # --- USERNAME ---
             print("[*] Compilazione Username...")
             user_el = target.locator("input[type='text']:visible, input[placeholder*='utente']:visible").first
             user_el.wait_for(state="visible", timeout=10000)
             user_el.click()
             user_el.fill(USERNAME)
             
-            # --- 2. PASSWORD ---
+            # --- PASSWORD ---
             print("[*] Compilazione Password...")
             pwd_el = target.locator("input[type='password']").first
             pwd_el.wait_for(state="attached", timeout=10000)
 
             page.keyboard.press("Tab")
             page.wait_for_timeout(200)
-            page.keyboard.type(PASSWORD, delay=40)
+            page.keyboard.type(PASSWORD, delay=30)
             page.wait_for_timeout(200)
 
+            # Sincronizza lo stato React/Vue del form
             target.evaluate("""
                 (pwdValue) => {
                     const pwdInput = document.querySelector("input[type='password']");
@@ -73,48 +74,38 @@ def main():
                 }
             """, PASSWORD)
 
-            page.wait_for_timeout(500)
-
-            # --- 3. SELEZIONE REGION 004 ---
-            print("[*] Selezione Region 004...")
-            try:
-                # Cerca il dropdown della region (attualmente mostra 'region003')
-                region_dropdown = target.locator("text='region003'").first
-                if region_dropdown.is_visible():
-                    region_dropdown.click()
-                    page.wait_for_timeout(500)
-                    
-                    # Clicca sull'opzione 'region004' nel menu a tendina aperto
-                    opt_4 = target.locator("text='region004', li:has-text('004'), div:has-text('004')").first
-                    if opt_4.is_visible():
-                        opt_4.click()
-                        print("[+] Selezionato region004 dal menu!")
-                    else:
-                        print("[!] Opzione region004 non trovata direttamente, invio della freccia giù...")
-                        page.keyboard.press("ArrowDown")
-                        page.keyboard.press("Enter")
-            except Exception as reg_err:
-                print(f"[!] Errore durante la selezione della regione: {reg_err}")
-
             page.wait_for_timeout(1000)
 
-            # Screenshot di verifica compilazione con Region 4
-            page.screenshot(path="pre_login_check.png")
-            print("[+] Screenshot 'pre_login_check.png' salvato.")
+            # --- SUBMIT NATIVO DEL FORM ---
+            print("[*] Esecuzione Submit Nativo del Form di Login...")
+            # Forziamo l'invio nativo via JavaScript su qualsiasi form presente nel frame
+            target.evaluate("""
+                () => {
+                    const form = document.querySelector('form');
+                    if (form) {
+                        form.submit();
+                    } else {
+                        const btn = document.querySelector("button, input[type='submit'], .login-btn");
+                        if (btn) btn.click();
+                    }
+                }
+            """)
 
-            # --- 4. CLICK ACCEDI ---
-            print("[*] Click su 'Accedi'...")
-            btn = target.locator("button:has-text('Accedi'), .login-btn, input[type='submit'], div:has-text('Accedi')").first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click(force=True)
-            else:
-                page.keyboard.press("Enter")
+            # Fallback con invio tasto Enter da tastiera fisica
+            page.keyboard.press("Enter")
 
-            print("[*] Attesa reindirizzamento Dashboard...")
-            page.wait_for_timeout(15000)
+            print("[*] Attesa caricamento dashboard (20 secondi)...")
+            page.wait_for_timeout(20000)
 
+            # Se compare un popup di avviso/cookie post-login, proviamo a chiuderlo
+            try:
+                page.locator("button:has-text('OK'), button:has-text('Conferma'), .nivo-close").click(timeout=3000)
+            except Exception:
+                pass
+
+            # Screenshot finale
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato!")
+            print("[+] Screenshot 'dashboard_check.png' generato!")
 
         except Exception as e:
             print(f"[-] Errore catturato durante la procedura: {e}")
