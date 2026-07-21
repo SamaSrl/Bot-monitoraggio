@@ -52,50 +52,52 @@ def main():
             print("[*] Inserimento Username...")
             user_input = target_frame.locator("input[type='text']:visible, input#username").first
             user_input.wait_for(state="visible", timeout=10000)
-            user_input.click()
+            user_input.focus()
             user_input.fill(USERNAME)
             print("[+] Username inserito.")
             page.wait_for_timeout(500)
 
-            # --- STEP 2: PASSWORD (Via TAB + Fallback Scroll) ---
+            # --- STEP 2: PASSWORD ---
             print("[*] Inserimento Password...")
-            # Premiamo Tab per passare direttamente dal campo Username al campo Password
-            target_frame.press("input[type='text']:visible", "Tab")
-            page.wait_for_timeout(300)
-
             pwd_input = target_frame.locator("input[type='password']").first
-            # Assicuriamo che l'elemento sia visibile nello schermo portandolo in vista
-            try:
-                pwd_input.scroll_into_view_if_needed()
-            except Exception:
-                pass
-
-            pwd_input.fill(PASSWORD)
+            pwd_input.wait_for(state="attached", timeout=10000)
+            
+            # Usiamo focus + press_sequentially senza fare click
+            pwd_input.focus()
+            page.wait_for_timeout(200)
+            pwd_input.fill("")
+            pwd_input.press_sequentially(PASSWORD, delay=50)
             print("[+] Password inserita.")
             page.wait_for_timeout(500)
 
-            # Screenshot di verifica compilazione completa
+            # Salviamo lo screenshot di verifica con entrambi i campi compilati
             page.screenshot(path="pre_login_check.png")
             print("[+] Screenshot 'pre_login_check.png' salvato.")
 
             # --- STEP 3: LOGIN ---
             print("[*] Invio form di Login...")
-            login_btn = target_frame.locator("button:visible, input[type='submit']:visible, .btn-login:visible, #loginBtn").first
+            # Proviamo prima a premere Enter sul campo password
+            pwd_input.press("Enter")
+            
+            # Se dopo 3 secondi siamo ancora nella stessa pagina, clicchiamo il pulsante Accedi
+            page.wait_for_timeout(3000)
+            login_btn = target_frame.locator("button:visible, input[type='submit']:visible, .btn-login:visible, #loginBtn, a:has-text('Accedi')").first
             if login_btn.count() > 0 and login_btn.is_visible():
                 login_btn.click(force=True)
-            else:
-                pwd_input.press("Enter")
 
             print("[*] Attesa reindirizzamento Dashboard...")
             page.wait_for_timeout(15000)
 
+            # Salviamo lo screenshot della Dashboard dopo il login
+            page.screenshot(path="dashboard_check.png")
+            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+
         except Exception as e:
-            print(f"[-] Errore intercettato durante la procedura: {e}")
+            print(f"[-] Errore durante l'esecuzione: {e}")
+            # In caso di errore salviamo comunque lo screenshot dello stato attuale
+            page.screenshot(path="dashboard_check.png")
 
         finally:
-            print("[*] Salvataggio screenshot di controllo...")
-            page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato!")
             browser.close()
 
 if __name__ == "__main__":
