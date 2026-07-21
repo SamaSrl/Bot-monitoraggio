@@ -30,11 +30,22 @@ jobs:
           FUSIONSOLAR_PWD: ${{ secrets.FUSIONSOLAR_PWD }}
         run: python src/main.py
 
-      - name: Salva e carica i dati aggiornati su GitHub
+      # --- CARICA GLI SCREENSHOT COME ARTEFATTI SCARICABILI ---
+      - name: Scarica Screenshot Esecuzione
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-fusionsolar
+          path: |
+            pre_login_check.png
+            dashboard_check.png
+          retention-days: 7
+
+      - name: Salva e carica il report su GitHub
         if: always()
         run: |
           git config --global user.name "FusionSolar Bot"
           git config --global user.email "bot@github-actions.local"
-          git add REPORT_ALLARMI.md dashboard_check.png || true
+          git add REPORT_ALLARMI.md dashboard_check.png pre_login_check.png || true
           git commit -m "Aggiornamento report e screenshot [skip ci]" || true
           git push origin main || true
