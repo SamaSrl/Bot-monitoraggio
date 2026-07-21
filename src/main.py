@@ -35,7 +35,7 @@ def main():
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(5000)
 
-            # Cerca l'iframe di login di Huawei
+            # Cerca l'iframe di login
             target_frame = None
             for frame in page.frames:
                 if "unisso" in frame.url or frame.locator("input[type='password']").count() > 0:
@@ -45,50 +45,57 @@ def main():
 
             if not target_frame:
                 target_frame = page
-                print("[!] Uso pagina principale.")
 
             page.wait_for_timeout(2000)
 
-            # --- COMPILAZIONE CAMPO USERNAME VISIBILE ---
-            print("[*] Ricerca campo Username visibile...")
-            # Usa il filtro :visible per scartare gli input nascosti nel DOM
-            user_input = target_frame.locator("input[type='text']:visible, input#username, input[name='username']:visible").first
+            # --- STEP 1: USERNAME ---
+            print("[*] Inserimento Username...")
+            user_input = target_frame.locator("input[type='text']:visible, input#username").first
             user_input.wait_for(state="visible", timeout=10000)
             user_input.click()
             user_input.fill(USERNAME)
             print("[+] Username inserito.")
+            page.wait_for_timeout(500)
 
-            # --- COMPILAZIONE CAMPO PASSWORD VISIBILE ---
-            print("[*] Ricerca campo Password visibile...")
-            pwd_input = target_frame.locator("input[type='password']:visible, input#password").first
-            pwd_input.wait_for(state="visible", timeout=10000)
-            pwd_input.click()
+            # --- STEP 2: PASSWORD (Via TAB + Fallback Scroll) ---
+            print("[*] Inserimento Password...")
+            # Premiamo Tab per passare direttamente dal campo Username al campo Password
+            target_frame.press("input[type='text']:visible", "Tab")
+            page.wait_for_timeout(300)
+
+            pwd_input = target_frame.locator("input[type='password']").first
+            # Assicuriamo che l'elemento sia visibile nello schermo portandolo in vista
+            try:
+                pwd_input.scroll_into_view_if_needed()
+            except Exception:
+                pass
+
             pwd_input.fill(PASSWORD)
             print("[+] Password inserita.")
+            page.wait_for_timeout(500)
 
-            # Salva lo screenshot con i campi compilati prima dell'invio
+            # Screenshot di verifica compilazione completa
             page.screenshot(path="pre_login_check.png")
             print("[+] Screenshot 'pre_login_check.png' salvato.")
 
-            # --- INVIO FORM ---
-            print("[*] Invio credenziali...")
+            # --- STEP 3: LOGIN ---
+            print("[*] Invio form di Login...")
             login_btn = target_frame.locator("button:visible, input[type='submit']:visible, .btn-login:visible, #loginBtn").first
             if login_btn.count() > 0 and login_btn.is_visible():
-                login_btn.click()
+                login_btn.click(force=True)
             else:
                 pwd_input.press("Enter")
 
-            print("[*] Attesa risposta del server...")
-            page.wait_for_timeout(12000)
+            print("[*] Attesa reindirizzamento Dashboard...")
+            page.wait_for_timeout(15000)
 
         except Exception as e:
             print(f"[-] Errore intercettato durante la procedura: {e}")
 
         finally:
-            # Viene eseguito SEMPRE per garantire la creazione dello screenshot
-            print("[*] Generazione screenshot finale di controllo...")
+            print("[*] Salvataggio screenshot di controllo...")
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+            print("[+] Screenshot 'dashboard_check.png' salvato!")
             browser.close()
 
 if __name__ == "__main__":
