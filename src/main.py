@@ -18,8 +18,7 @@ def main():
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-web-security"
+                "--disable-setuid-sandbox"
             ]
         )
         
@@ -36,7 +35,7 @@ def main():
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(4000)
 
-            # Individua il frame UniSSO
+            # Cerca il frame UniSSO
             target = page
             for frame in page.frames:
                 if "unisso" in frame.url or frame.locator("input[type='password']").count() > 0:
@@ -44,14 +43,14 @@ def main():
                     print(f"[+] Frame UniSSO agganciato: {frame.url}")
                     break
 
-            # --- USERNAME ---
+            # --- STEP 1: USERNAME ---
             print("[*] Compilazione Username...")
             user_el = target.locator("input[type='text']:visible, input[placeholder*='utente']:visible").first
             user_el.wait_for(state="visible", timeout=10000)
             user_el.click()
             user_el.fill(USERNAME)
             
-            # --- PASSWORD ---
+            # --- STEP 2: PASSWORD ---
             print("[*] Compilazione Password...")
             pwd_el = target.locator("input[type='password']").first
             pwd_el.wait_for(state="attached", timeout=10000)
@@ -61,7 +60,6 @@ def main():
             page.keyboard.type(PASSWORD, delay=30)
             page.wait_for_timeout(200)
 
-            # Sincronizza lo stato React/Vue del form
             target.evaluate("""
                 (pwdValue) => {
                     const pwdInput = document.querySelector("input[type='password']");
@@ -69,43 +67,65 @@ def main():
                         pwdInput.value = pwdValue;
                         pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
                         pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
-                        pwdInput.dispatchEvent(new Event('blur', { bubbles: true }));
                     }
                 }
             """, PASSWORD)
+            page.wait_for_timeout(500)
+
+            # --- STEP 3: SELEZIONE REGION 004 (ELEMENT UI DROPDOWN) ---
+            print("[*] Apertura menu Selezione Region...")
+            try:
+                # Clicca sul box del selettore region
+                region_box = target.locator("input[readonly], .el-select, .select-region, div:has-text('region003')").first
+                region_box.click(force=True)
+                page.wait_for_timeout(1000)
+
+                # Cerca l'opzione region004 nell'elenco a comparsa (può essere sia nell'iframe che nella pagina madre)
+                print("[*] Selezione 'region004'...")
+                opt_004 = target.locator("li:has-text('region004'), span:has-text('region004'), div:has-text('region004')").first
+                
+                if opt_004.is_visible():
+                    opt_004.click(force=True)
+                    print("[+] Region 004 selezionata!")
+                else:
+                    # Se l'elenco si apre nel documento principale
+                    page.locator("li:has-text('region004'), span:has-text('region004')").first.click(force=True)
+                    print("[+] Region 004 selezionata dal documento principale!")
+            except Exception as reg_err:
+                print(f"[!] Avviso selezione region: {reg_err}")
 
             page.wait_for_timeout(1000)
 
-            # --- SUBMIT NATIVO DEL FORM ---
-            print("[*] Esecuzione Submit Nativo del Form di Login...")
-            # Forziamo l'invio nativo via JavaScript su qualsiasi form presente nel frame
-            target.evaluate("""
+            # Screenshot di verifica prima del click finale
+            page.screenshot(path="pre_login_check.png")
+
+            # --- STEP 4: CLICK PULSANTE ACCEDI ---
+            print("[*] Esecuzione Click su 'Accedi'...")
+            
+            # Troviamo il pulsante 'Accedi' e facciamo click con Javascript + Playwright
+            login_success = target.evaluate("""
                 () => {
-                    const form = document.querySelector('form');
-                    if (form) {
-                        form.submit();
-                    } else {
-                        const btn = document.querySelector("button, input[type='submit'], .login-btn");
-                        if (btn) btn.click();
+                    const buttons = Array.from(document.querySelectorAll('button, div, span, a'));
+                    const btn = buttons.find(b => b.innerText && b.innerText.trim() === 'Accedi');
+                    if (btn) {
+                        btn.click();
+                        return true;
                     }
+                    return false;
                 }
             """)
 
-            # Fallback con invio tasto Enter da tastiera fisica
-            page.keyboard.press("Enter")
+            if not login_success:
+                print("[!] Click JS fallito, eseguo click fisico sul pulsante...")
+                btn_acc = target.locator("button:has-text('Accedi'), .login-btn, input[type='submit']").first
+                btn_acc.click(force=True)
 
-            print("[*] Attesa caricamento dashboard (20 secondi)...")
+            print("[*] Attesa caricamento Dashboard...")
             page.wait_for_timeout(20000)
 
-            # Se compare un popup di avviso/cookie post-login, proviamo a chiuderlo
-            try:
-                page.locator("button:has-text('OK'), button:has-text('Conferma'), .nivo-close").click(timeout=3000)
-            except Exception:
-                pass
-
-            # Screenshot finale
+            # Screenshot Finale della Dashboard
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' generato!")
+            print("[+] Screenshot 'dashboard_check.png' generato con successo!")
 
         except Exception as e:
             print(f"[-] Errore catturato durante la procedura: {e}")
