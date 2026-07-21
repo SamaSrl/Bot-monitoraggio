@@ -36,7 +36,7 @@ def main():
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(4000)
 
-            # Cerca il frame corretto (Iframe UniSSO o Pagina Principale)
+            # Cerca il frame corretto di UniSSO
             target = page
             for frame in page.frames:
                 if "unisso" in frame.url or frame.locator("input[type='password']").count() > 0:
@@ -44,27 +44,23 @@ def main():
                     print(f"[+] Trovato frame dedicato: {frame.url}")
                     break
 
-            # --- COMPILAZIONE USERNAME ---
+            # --- 1. USERNAME ---
             print("[*] Compilazione Username...")
             user_el = target.locator("input[type='text']:visible, input[placeholder*='utente']:visible").first
             user_el.wait_for(state="visible", timeout=10000)
             user_el.click()
             user_el.fill(USERNAME)
             
-            # --- COMPILAZIONE PASSWORD VIA EVENTI JS E TASTIERA ---
+            # --- 2. PASSWORD ---
             print("[*] Compilazione Password...")
             pwd_el = target.locator("input[type='password']").first
             pwd_el.wait_for(state="attached", timeout=10000)
 
-            # 1. Spostiamo il focus usando la tastiera (Tab)
             page.keyboard.press("Tab")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(200)
+            page.keyboard.type(PASSWORD, delay=40)
+            page.wait_for_timeout(200)
 
-            # 2. Scriviamo la password tasto per tasto
-            page.keyboard.type(PASSWORD, delay=50)
-            page.wait_for_timeout(300)
-
-            # 3. Forziamo l'aggiornamento dello stato interno via JS
             target.evaluate("""
                 (pwdValue) => {
                     const pwdInput = document.querySelector("input[type='password']");
@@ -77,30 +73,48 @@ def main():
                 }
             """, PASSWORD)
 
+            page.wait_for_timeout(500)
+
+            # --- 3. SELEZIONE REGION 004 ---
+            print("[*] Selezione Region 004...")
+            try:
+                # Cerca il dropdown della region (attualmente mostra 'region003')
+                region_dropdown = target.locator("text='region003'").first
+                if region_dropdown.is_visible():
+                    region_dropdown.click()
+                    page.wait_for_timeout(500)
+                    
+                    # Clicca sull'opzione 'region004' nel menu a tendina aperto
+                    opt_4 = target.locator("text='region004', li:has-text('004'), div:has-text('004')").first
+                    if opt_4.is_visible():
+                        opt_4.click()
+                        print("[+] Selezionato region004 dal menu!")
+                    else:
+                        print("[!] Opzione region004 non trovata direttamente, invio della freccia giù...")
+                        page.keyboard.press("ArrowDown")
+                        page.keyboard.press("Enter")
+            except Exception as reg_err:
+                print(f"[!] Errore durante la selezione della regione: {reg_err}")
+
             page.wait_for_timeout(1000)
 
-            # Screenshot di verifica compilazione
+            # Screenshot di verifica compilazione con Region 4
             page.screenshot(path="pre_login_check.png")
             print("[+] Screenshot 'pre_login_check.png' salvato.")
 
-            # --- INVIO E LOGIN ---
-            print("[*] Tentativo di Invio Login...")
-            
-            # Clicchiamo sul pulsante 'Accedi' visibile
-            btn = target.locator("button:has-text('Accedi'), .login-btn, input[type='submit']").first
+            # --- 4. CLICK ACCEDI ---
+            print("[*] Click su 'Accedi'...")
+            btn = target.locator("button:has-text('Accedi'), .login-btn, input[type='submit'], div:has-text('Accedi')").first
             if btn.count() > 0 and btn.is_visible():
                 btn.click(force=True)
             else:
                 page.keyboard.press("Enter")
 
-            page.wait_for_timeout(5000)
-            page.screenshot(path="after_submit_check.png")
-            print("[+] Screenshot 'after_submit_check.png' salvato.")
+            print("[*] Attesa reindirizzamento Dashboard...")
+            page.wait_for_timeout(15000)
 
-            # Attesa finale reindirizzamento
-            page.wait_for_timeout(10000)
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato.")
+            print("[+] Screenshot 'dashboard_check.png' salvato!")
 
         except Exception as e:
             print(f"[-] Errore catturato durante la procedura: {e}")
