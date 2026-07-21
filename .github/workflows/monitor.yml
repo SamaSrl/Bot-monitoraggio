@@ -28,6 +28,7 @@ jobs:
         env:
           FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
           FUSIONSOLAR_PWD: ${{ secrets.FUSIONSOLAR_PWD }}
+          FUSIONSOLAR_COOKIES: ${{ secrets.FUSIONSOLAR_COOKIES }}
         run: python src/main.py
 
       # --- CARICA GLI SCREENSHOT COME ARTEFATTI SCARICABILI ---
