@@ -18,7 +18,8 @@ def main():
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
+                "--disable-setuid-sandbox",
+                "--disable-web-security"
             ]
         )
         
@@ -32,69 +33,77 @@ def main():
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(5000)
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(4000)
 
-            # Cerca l'iframe di login
-            target_frame = None
+            # Cerca il frame corretto (Iframe UniSSO o Pagina Principale)
+            target = page
             for frame in page.frames:
                 if "unisso" in frame.url or frame.locator("input[type='password']").count() > 0:
-                    target_frame = frame
-                    print(f"[+] Frame di login individuato: {frame.url}")
+                    target = frame
+                    print(f"[+] Trovato frame dedicato: {frame.url}")
                     break
 
-            if not target_frame:
-                target_frame = page
-
-            page.wait_for_timeout(2000)
-
-            # --- STEP 1: USERNAME ---
-            print("[*] Inserimento Username...")
-            user_input = target_frame.locator("input[type='text']:visible, input#username").first
-            user_input.wait_for(state="visible", timeout=10000)
-            user_input.focus()
-            user_input.fill(USERNAME)
-            print("[+] Username inserito.")
-            page.wait_for_timeout(500)
-
-            # --- STEP 2: PASSWORD ---
-            print("[*] Inserimento Password...")
-            pwd_input = target_frame.locator("input[type='password']").first
-            pwd_input.wait_for(state="attached", timeout=10000)
+            # --- COMPILAZIONE USERNAME ---
+            print("[*] Compilazione Username...")
+            user_el = target.locator("input[type='text']:visible, input[placeholder*='utente']:visible").first
+            user_el.wait_for(state="visible", timeout=10000)
+            user_el.click()
+            user_el.fill(USERNAME)
             
-            # Usiamo focus + press_sequentially senza fare click
-            pwd_input.focus()
-            page.wait_for_timeout(200)
-            pwd_input.fill("")
-            pwd_input.press_sequentially(PASSWORD, delay=50)
-            print("[+] Password inserita.")
-            page.wait_for_timeout(500)
+            # --- COMPILAZIONE PASSWORD VIA EVENTI JS E TASTIERA ---
+            print("[*] Compilazione Password...")
+            pwd_el = target.locator("input[type='password']").first
+            pwd_el.wait_for(state="attached", timeout=10000)
 
-            # Salviamo lo screenshot di verifica con entrambi i campi compilati
+            # 1. Spostiamo il focus usando la tastiera (Tab)
+            page.keyboard.press("Tab")
+            page.wait_for_timeout(300)
+
+            # 2. Scriviamo la password tasto per tasto
+            page.keyboard.type(PASSWORD, delay=50)
+            page.wait_for_timeout(300)
+
+            # 3. Forziamo l'aggiornamento dello stato interno via JS
+            target.evaluate("""
+                (pwdValue) => {
+                    const pwdInput = document.querySelector("input[type='password']");
+                    if (pwdInput) {
+                        pwdInput.value = pwdValue;
+                        pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        pwdInput.dispatchEvent(new Event('blur', { bubbles: true }));
+                    }
+                }
+            """, PASSWORD)
+
+            page.wait_for_timeout(1000)
+
+            # Screenshot di verifica compilazione
             page.screenshot(path="pre_login_check.png")
             print("[+] Screenshot 'pre_login_check.png' salvato.")
 
-            # --- STEP 3: LOGIN ---
-            print("[*] Invio form di Login...")
-            # Proviamo prima a premere Enter sul campo password
-            pwd_input.press("Enter")
+            # --- INVIO E LOGIN ---
+            print("[*] Tentativo di Invio Login...")
             
-            # Se dopo 3 secondi siamo ancora nella stessa pagina, clicchiamo il pulsante Accedi
-            page.wait_for_timeout(3000)
-            login_btn = target_frame.locator("button:visible, input[type='submit']:visible, .btn-login:visible, #loginBtn, a:has-text('Accedi')").first
-            if login_btn.count() > 0 and login_btn.is_visible():
-                login_btn.click(force=True)
+            # Clicchiamo sul pulsante 'Accedi' visibile
+            btn = target.locator("button:has-text('Accedi'), .login-btn, input[type='submit']").first
+            if btn.count() > 0 and btn.is_visible():
+                btn.click(force=True)
+            else:
+                page.keyboard.press("Enter")
 
-            print("[*] Attesa reindirizzamento Dashboard...")
-            page.wait_for_timeout(15000)
+            page.wait_for_timeout(5000)
+            page.screenshot(path="after_submit_check.png")
+            print("[+] Screenshot 'after_submit_check.png' salvato.")
 
-            # Salviamo lo screenshot della Dashboard dopo il login
+            # Attesa finale reindirizzamento
+            page.wait_for_timeout(10000)
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+            print("[+] Screenshot 'dashboard_check.png' salvato.")
 
         except Exception as e:
-            print(f"[-] Errore durante l'esecuzione: {e}")
-            # In caso di errore salviamo comunque lo screenshot dello stato attuale
+            print(f"[-] Errore catturato durante la procedura: {e}")
             page.screenshot(path="dashboard_check.png")
 
         finally:
