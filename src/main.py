@@ -23,34 +23,58 @@ def main():
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(3000)
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(4000)
 
-            # --- PASSO 1: COMPILAZIONE USERNAME ---
-            print("[*] Inserimento Username...")
-            user_input = page.locator("input[placeholder*='Account'], input[placeholder*='Username'], input[type='text']").first
-            user_input.fill(USERNAME)
+            # --- STEP 1: CHIUSURA BANNER COOKIE SE PRESENTE ---
+            print("[*] Gestione banner cookie/overlay...")
+            try:
+                # Clicca sulla 'X' del banner cookie in basso se presente
+                cookie_close = page.locator("text='X', .pv-cookie-close, button:has-text('Accetta')").first
+                if cookie_close.is_visible():
+                    cookie_close.click(force=True)
+                    page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            # --- STEP 2: INSERIMENTO USERNAME TRAMITE TASTIERA ---
+            print("[*] Inserimento Username via Tastiera...")
+            user_input = page.locator("input[name='ssoCredentials.username'], input[placeholder*='utente']").first
+            user_input.click(force=True)
+            page.wait_for_timeout(300)
+            # Puliamo eventuale testo esistente e scriviamo lo username
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(USERNAME, delay=30)
             page.wait_for_timeout(500)
 
-            # --- PASSO 2: COMPILAZIONE PASSWORD ---
-            print("[*] Inserimento Password...")
-            pwd_input = page.locator("input[type='password']").first
-            pwd_input.fill(PASSWORD)
+            # --- STEP 3: INSERIMENTO PASSWORD TRAMITE TASTIERA ---
+            print("[*] Inserimento Password via Tastiera...")
+            pwd_input = page.locator("input[name='ssoCredentials.password'], input[type='password']").first
+            pwd_input.click(force=True)
+            page.wait_for_timeout(300)
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(PASSWORD, delay=30)
             page.wait_for_timeout(500)
 
-            # --- PASSO 3: CLICK SUL PULSANTE ACCEDI ---
-            print("[*] Click su 'Accedi'...")
-            login_btn = page.locator("button:has-text('Accedi'), button:has-text('Log In'), span:has-text('Accedi')").first
-            if login_btn.is_visible():
-                login_btn.click()
-            else:
-                page.keyboard.press("Enter")
+            # --- STEP 4: CLICK ACCEDI ---
+            print("[*] Invio credenziali...")
+            page.keyboard.press("Enter")
+            
+            # Per sicurezza clicchiamo anche sul pulsante azzurro se non è partito l'Enter
+            page.wait_for_timeout(1000)
+            login_btn = page.locator("button:has-text('Accedi'), span:has-text('Accedi')").first
+            try:
+                if login_btn.is_visible():
+                    login_btn.click(force=True)
+            except Exception:
+                pass
 
-            # Attesa di caricamento dopo il login
             print("[*] Attesa risposta dal server...")
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(10000)
 
-            # --- PASSO 4: SCREENSHOT DI VERIFICA ---
+            # --- STEP 5: SCREENSHOT DI VERIFICA ---
             page.screenshot(path="dashboard_check.png")
             print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
 
