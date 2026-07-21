@@ -20,39 +20,33 @@ def main():
             locale="it-IT"
         )
         
-        # Iniezione Cookie di Sessione se presenti
+        # Iniezione Cookie
         if COOKIES_JSON:
             try:
                 cookies = json.loads(COOKIES_JSON)
                 context.add_cookies(cookies)
-                print("[+] Cookie di sessione caricati con successo!")
+                print("[+] Cookie caricati con successo!")
             except Exception as e:
-                print(f"[!] Errore nel caricamento dei cookie JSON: {e}")
+                print(f"[!] Errore parsing cookie: {e}")
         else:
             print("[!] ATTENZIONE: Secret FUSIONSOLAR_COOKIES non trovato nei segreti!")
 
         page = context.new_page()
 
         try:
-            print(f"[*] Apertura diretta Dashboard FusionSolar...")
-            # Navighiamo direttamente alla homepage interna / dashboard
-            page.goto(f"{FUSIONSOLAR_HOST}/pvmswebsite/assets/build/index.html#/kpi", wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(8000)
+            print(f"[*] Navigazione sulla Home Page di FusionSolar...")
+            # Carichiamo la root URL per permettere il reindirizzamento automatico della sessione
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(10000)
 
-            # Se veniamo reindirizzati alla login, proviamo l'URL radice
-            if "login" in page.url:
-                print("[!] Reindirizzato su login, tento caricamento radice...")
-                page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle")
-                page.wait_for_timeout(8000)
+            print(f"[+] URL di atterraggio: {page.url}")
 
-            print(f"[+] URL Attuale: {page.url}")
-
-            # Salvataggio dello screenshot della Dashboard
+            # Salva screenshot del risultato
             page.screenshot(path="dashboard_check.png")
-            print("[+] Screenshot 'dashboard_check.png' salvato con successo!")
+            print("[+] Screenshot 'dashboard_check.png' salvato!")
 
         except Exception as e:
-            print(f"[-] Errore nell'accesso via cookie: {e}")
+            print(f"[-] Errore nell'accesso: {e}")
             page.screenshot(path="dashboard_check.png")
 
         finally:
