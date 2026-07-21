@@ -10,30 +10,33 @@ def main():
         print("[-] Errore: Password non trovata nei segreti di GitHub (FUSIONSOLAR_PWD).")
         return
 
-    print("[*] Avvio Bot Monitoraggio FusionSolar...")
+    print("[*] Avvio Bot Monitoraggio FusionSolar (Stealth Mode)...")
     
     with sync_playwright() as p:
-        # Avvio del browser con argomenti per disabilitare i flag di automazione
+        # Configurazione Browser con bypass anti-bot avanzato
         browser = p.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
+                "--disable-setuid-sandbox",
+                "--disable-infobars",
+                "--window-size=1920,1080",
+                "--start-maximized"
             ]
         )
         
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
-            locale="it-IT,it;q=0.9"
+            locale="it-IT",
+            timezone_id="Europe/Rome"
         )
         
-        # Script per nascondere il flag webdriver
+        # Script di mascheramento proprietà webdriver
         context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.navigator.chrome = { runtime: {} };
         """)
 
         page = context.new_page()
@@ -41,51 +44,51 @@ def main():
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
             page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(4000)
 
-            # --- STEP 1: GESTIONE COOKIE ---
-            print("[*] Verifico chiusura cookie/banner...")
-            try:
-                cookie_btn = page.locator("button:has-text('Accetta'), .pv-cookie-close, [aria-label='Close']").first
-                if cookie_btn.is_visible():
-                    cookie_btn.click()
-                    page.wait_for_timeout(1000)
-            except Exception:
-                pass
+            # 1. Trova ed evidenzia il campo Username
+            print("[*] Ricerca campo Username...")
+            inputs = page.locator("input").all()
+            print(f"[*] Trovati {len(inputs)} campi input nella pagina.")
 
-            # --- STEP 2: INSERIMENTO CREDENZIALI ---
-            print("[*] Compilazione credenziali...")
+            # Tenta la ricerca selettiva
+            user_input = page.locator("input[type='text']").first
+            user_input.wait_for(state="attached", timeout=10000)
             
-            # Selettore generico per il primo input di testo visibile
-            user_input = page.locator("input[type='text'], input[name*='user']").first
-            user_input.wait_for(state="visible", timeout=15000)
-            user_input.click()
-            user_input.fill(USERNAME)
+            # Focus, pulizia e digitazione simulata tasto per tasto
+            user_input.focus()
+            page.wait_for_timeout(300)
+            user_input.press("Control+a")
+            user_input.press("Backspace")
+            
+            for char in USERNAME:
+                page.keyboard.type(char, delay=50)
             page.wait_for_timeout(500)
 
-            # Selettore per l'input password
+            # 2. Trova ed evidenzia il campo Password
+            print("[*] Ricerca campo Password...")
             pwd_input = page.locator("input[type='password']").first
-            pwd_input.wait_for(state="visible", timeout=15000)
-            pwd_input.click()
-            pwd_input.fill(PASSWORD)
+            pwd_input.focus()
+            page.wait_for_timeout(300)
+            pwd_input.press("Control+a")
+            pwd_input.press("Backspace")
+            
+            for char in PASSWORD:
+                page.keyboard.type(char, delay=50)
             page.wait_for_timeout(500)
 
-            # Screenshot di verifica compilazione
+            # Salva screenshot della compilazione prima del click
             page.screenshot(path="pre_login_check.png")
-            print("[+] Screenshot 'pre_login_check.png' salvato.")
+            print("[+] Screenshot 'pre_login_check.png' salvato con successo.")
 
-            # --- STEP 3: CLICK LOGIN ---
-            print("[*] Esecuzione Login...")
-            login_btn = page.locator("button:has-text('Accedi'), input[type='submit']").first
-            if login_btn.is_visible():
-                login_btn.click()
-            else:
-                pwd_input.press("Enter")
+            # 3. Invio credenziali via Invio da tastiera
+            print("[*] Invio form con Enter...")
+            pwd_input.press("Enter")
+            
+            # Attesa di caricamento ed eventuale reindirizzamento
+            page.wait_for_timeout(15000)
 
-            print("[*] Attesa reindirizzamento...")
-            page.wait_for_timeout(12000)
-
-            # Screenshot dopo login
+            # Screenshot finale post-login
             page.screenshot(path="dashboard_check.png")
             print("[+] Screenshot 'dashboard_check.png' salvato.")
 
