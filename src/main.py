@@ -10,85 +10,92 @@ def main():
         print("[-] Errore: Password non trovata nei segreti di GitHub (FUSIONSOLAR_PWD).")
         return
 
-    print("[*] Avvio Bot Monitoraggio FusionSolar (Stealth Mode)...")
+    print("[*] Avvio Bot Monitoraggio FusionSolar...")
     
     with sync_playwright() as p:
-        # Configurazione Browser con bypass anti-bot avanzato
         browser = p.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-infobars",
-                "--window-size=1920,1080",
-                "--start-maximized"
+                "--disable-setuid-sandbox"
             ]
         )
         
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
-            locale="it-IT",
-            timezone_id="Europe/Rome"
+            locale="it-IT"
         )
         
-        # Script di mascheramento proprietà webdriver
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.navigator.chrome = { runtime: {} };
-        """)
-
         page = context.new_page()
 
         try:
             print(f"[*] Navigazione su {FUSIONSOLAR_HOST}...")
-            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(4000)
+            page.goto(f"{FUSIONSOLAR_HOST}/", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(6000)
 
-            # 1. Trova ed evidenzia il campo Username
-            print("[*] Ricerca campo Username...")
-            inputs = page.locator("input").all()
-            print(f"[*] Trovati {len(inputs)} campi input nella pagina.")
+            # --- IDENTIFICAZIONE TELAIO (IFRAME) DI LOGIN ---
+            print(f"[*] Numero di frame trovati nella pagina: {len(page.frames)}")
+            
+            target_frame = None
+            for frame in page.frames:
+                try:
+                    # Cerchiamo il frame che possiede un input di tipo password o testo
+                    if frame.locator("input[type='password']").count() > 0:
+                        target_frame = frame
+                        print(f"[+] Frame di login trovato: {frame.url}")
+                        break
+                except Exception:
+                    continue
 
-            # Tenta la ricerca selettiva
-            user_input = page.locator("input[type='text']").first
+            # Se non trova un iframe specifico, lavora sulla pagina principale
+            if not target_frame:
+                print("[!] Nessun iframe specifico individuato, utilizzo la pagina principale.")
+                target_frame = page
+
+            # --- GESTIONE COOKIE SUL FRAME IDENTIFICATO ---
+            try:
+                cookie_btn = target_frame.locator("button:has-text('Accetta'), .pv-cookie-close, [aria-label='Close']").first
+                if cookie_btn.is_visible():
+                    cookie_btn.click()
+                    page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            # --- INSERIMENTO CREDENZIALI NELLO SCOPE CORRETTO ---
+            print("[*] Inserimento Username...")
+            user_input = target_frame.locator("input[type='text'], input[name*='user'], input[placeholder*='utente']").first
             user_input.wait_for(state="attached", timeout=10000)
-            
-            # Focus, pulizia e digitazione simulata tasto per tasto
-            user_input.focus()
-            page.wait_for_timeout(300)
-            user_input.press("Control+a")
-            user_input.press("Backspace")
-            
-            for char in USERNAME:
-                page.keyboard.type(char, delay=50)
+            user_input.click(force=True)
+            user_input.fill("")
+            user_input.type(USERNAME, delay=40)
             page.wait_for_timeout(500)
 
-            # 2. Trova ed evidenzia il campo Password
-            print("[*] Ricerca campo Password...")
-            pwd_input = page.locator("input[type='password']").first
-            pwd_input.focus()
-            page.wait_for_timeout(300)
-            pwd_input.press("Control+a")
-            pwd_input.press("Backspace")
-            
-            for char in PASSWORD:
-                page.keyboard.type(char, delay=50)
+            print("[*] Inserimento Password...")
+            pwd_input = target_frame.locator("input[type='password']").first
+            pwd_input.wait_for(state="attached", timeout=10000)
+            pwd_input.click(force=True)
+            pwd_input.fill("")
+            pwd_input.type(PASSWORD, delay=40)
             page.wait_for_timeout(500)
 
-            # Salva screenshot della compilazione prima del click
+            # Screenshot di verifica compilazione
             page.screenshot(path="pre_login_check.png")
-            print("[+] Screenshot 'pre_login_check.png' salvato con successo.")
+            print("[+] Screenshot 'pre_login_check.png' salvato.")
 
-            # 3. Invio credenziali via Invio da tastiera
-            print("[*] Invio form con Enter...")
-            pwd_input.press("Enter")
-            
-            # Attesa di caricamento ed eventuale reindirizzamento
+            # --- CLICK LOGIN ---
+            print("[*] Invio login...")
+            login_btn = target_frame.locator("button:has-text('Accedi'), input[type='submit'], .login-btn").first
+            if login_btn.is_visible():
+                login_btn.click(force=True)
+            else:
+                pwd_input.press("Enter")
+
+            print("[*] Attesa reindirizzamento...")
             page.wait_for_timeout(15000)
 
-            # Screenshot finale post-login
+            # Screenshot post-login
             page.screenshot(path="dashboard_check.png")
             print("[+] Screenshot 'dashboard_check.png' salvato.")
 
