@@ -84,16 +84,16 @@ class FusionSolarAPI:
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
         """
-        Recupera la produzione (kWh) del giorno precedente per gli impianti.
-        Ritorna un dizionario: { stationCode: "123.45" }
+        Recupera la produzione totale (kWh) del giorno precedente per gli impianti.
+        Ritorna un dizionario: { stationCode: "6290.0" }
         """
         if not self.xsrf_token or not station_codes:
             return {}
 
         url = f"{self.base_url}/getKpiStationDay"
         
-        # Calcola il timestamp in millisecondi per l'inizio della giornata di ieri
-        yesterday = datetime.now() - timedelta(days=1)
+        # Timestamp della mezzanotte del giorno prima
+        yesterday = datetime.utcnow() - timedelta(days=1)
         yesterday_start = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
         collect_time = int(yesterday_start.timestamp() * 1000)
 
@@ -114,8 +114,15 @@ class FusionSolarAPI:
                 for item in kpi_list:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
-                    # 'inverter_power' o 'day_power' indica la produzione giornaliera in kWh
-                    power = data_dict.get("inverter_power") or data_dict.get("day_power") or 0.0
+                    
+                    # 'product_power' è il campo Huawei corretto per l'energia giornaliera accumulata
+                    power = (
+                        data_dict.get("product_power") or 
+                        data_dict.get("day_power") or 
+                        data_dict.get("inverter_power") or 
+                        0.0
+                    )
+                    
                     if code:
                         kpi_map[code] = str(round(float(power), 2))
             else:
@@ -199,7 +206,6 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
     pdf.add_page()
 
     # Intestazione Tabella (A4 = 190 mm larghezza utile)
-    # 90 mm Nome + 35 mm Produzione + 65 mm Stato/Errori
     pdf.set_font("Arial", "B", 9)
     pdf.cell(90, 8, "Nome Impianto", border=1)
     pdf.cell(35, 8, "Prod. Ieri (kWh)", border=1, align="C")
