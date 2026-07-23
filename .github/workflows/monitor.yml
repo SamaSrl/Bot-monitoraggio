@@ -29,3 +29,10 @@ jobs:
           FUSIONSOLAR_API_KEY: ${{ secrets.FUSIONSOLAR_API_KEY }}
         run: |
           python src/main.py
+
+      - name: Salva Report come Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-impianti
+          path: report_impianti.json
