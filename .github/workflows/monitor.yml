@@ -1,13 +1,18 @@
-name: Monitoraggio FusionSolar
+Ecco il file .github/workflows/main.yml completo, aggiornato per utilizzare il nuovo script basato su API senza browser/Playwright.
+
+.github/workflows/main.yml
+YAML
+name: Bot Monitoraggio FusionSolar
 
 on:
+  workflow_dispatch: # Ti permette di avviare il bot manualmente dalla scheda Actions
   schedule:
-    - cron: '0 6,12,18 * * *'
-  workflow_dispatch:
+    - cron: '0 8 * * *' # (Opzionale) Esegue il bot automaticamente ogni giorno alle 08:00 UTC
 
 jobs:
-  monitor:
+  run-bot:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout del codice
         uses: actions/checkout@v4
@@ -20,33 +25,11 @@ jobs:
       - name: Installa dipendenze
         run: |
           python -m pip install --upgrade pip
-          pip install playwright
-          playwright install chromium
-          playwright install-deps
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
 
-      - name: Esegui il Bot di Monitoraggio
+      - name: Esegui il Bot di Monitoraggio API
         env:
-          FUSIONSOLAR_USER: ${{ secrets.FUSIONSOLAR_USER }}
-          FUSIONSOLAR_PWD: ${{ secrets.FUSIONSOLAR_PWD }}
-          FUSIONSOLAR_COOKIES: ${{ secrets.FUSIONSOLAR_COOKIES }}
-        run: python src/main.py
-
-      # --- CARICA GLI SCREENSHOT COME ARTEFATTI SCARICABILI ---
-      - name: Scarica Screenshot Esecuzione
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots-fusionsolar
-          path: |
-            pre_login_check.png
-            dashboard_check.png
-          retention-days: 7
-
-      - name: Salva e carica il report su GitHub
-        if: always()
+          FUSIONSOLAR_API_USER: ${{ secrets.FUSIONSOLAR_API_USER }}
+          FUSIONSOLAR_API_KEY: ${{ secrets.FUSIONSOLAR_API_KEY }}
         run: |
-          git config --global user.name "FusionSolar Bot"
-          git config --global user.email "bot@github-actions.local"
-          git add REPORT_ALLARMI.md dashboard_check.png pre_login_check.png || true
-          git commit -m "Aggiornamento report e screenshot [skip ci]" || true
-          git push origin main || true
+          python src/main.py
