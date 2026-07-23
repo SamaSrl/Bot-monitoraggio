@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from fpdf import FPDF
 
 # Configurazione Logging
@@ -14,17 +14,6 @@ logging.basicConfig(
 BASE_URL = "https://eu5.fusionsolar.huawei.com/thirdData"
 API_USER = os.getenv("FUSIONSOLAR_API_USER", "Monitoragg_api")
 API_PASS = os.getenv("FUSIONSOLAR_API_KEY", "TestAPI2026")
-
-# Tabella di fallback con le potenze reali (kWp) note dei tuoi impianti se l'API Huawei le restituisce a zero
-POTENZE_IMPIANTI_KWP = {
-    "Ponte Rosso": 200.0,
-    "Scuola Piaget": 100.0,
-    "Dignano": 150.0,
-    "Maniago": 150.0,
-    "Moretti": 50.0,
-    "Capannone Nuovo": 100.0,
-    "Rivignano": 200.0
-}
 
 
 class FusionSolarAPI:
@@ -64,13 +53,18 @@ class FusionSolarAPI:
         return []
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
+        """
+        Interroga i KPI storici giornalieri di Huawei impostando esplicitamente
+        il timestamp alla mezzanotte del giorno precedente per evitare dati parziali odierni.
+        """
         if not self.xsrf_token or not station_codes:
             return {}
 
         url = f"{self.base_url}/getKpiStationDay"
-        now_utc = datetime.now(timezone.utc)
-        yesterday_utc = now_utc - timedelta(days=1)
-        yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0, tzinfo=timezone.utc)
+        
+        # Calcoliamo la mezzanotte esatta di ieri nel formato timestamp millisecondi locale/UTC accettato da Huawei
+        yesterday = datetime.now() - timedelta(days=1)
+        yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
         collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
 
         payload = {
@@ -89,26 +83,23 @@ class FusionSolarAPI:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
                     
-                    # Cerca il campo giornaliero corretto
-                    val = None
-                    for key in ["day_power", "product_power", "inverter_power"]:
-                        if key in data_dict and data_dict[key] is not None:
-                            val = data_dict[key]
-                            break
+                    # Chiavi standard Huawei per l'energia giornaliera consolidata
+                    val = (
+                        data_dict.get("day_power") 
+                        or data_dict.get("product_power") 
+                        or data_dict.get("inverter_power") 
+                        or 0.0
+                    )
 
                     try:
-                        power_float = float(val) if val is not None else 0.0
+                        power_float = float(val)
                     except (ValueError, TypeError):
-                        power_float = 0.0
-
-                    # Se il valore restituito è anomalo (es. espresso in kWh ma altissimo o in MWh), lo normalizziamo
-                    if power_float > 50000: # Se supera i 50MWh giornalieri per questi tetti è un accumulo errato
                         power_float = 0.0
 
                     if code:
                         kpi_map[code] = power_float
         except Exception as e:
-            logging.error(f"Errore KPI: {e}")
+            logging.error(f"Errore recupero KPI ieri: {e}")
 
         return kpi_map
 
@@ -144,24 +135,8 @@ class FusionSolarAPI:
         return alarms_map
 
 
-def ottieni_potenza_e_coordinate(nome_impianto: str, api_capacity):
-    """Ricava la potenza corretta in kWp e le coordinate geografiche."""
-    # 1. Verifica capacità passata da Huawei
-    try:
-        cap = float(api_capacity) if api_capacity else 0.0
-    except:
-        cap = 0.0
-
-    # 2. Se Huawei non la passa, usa il dizionario di fallback basato sul nome
-    if cap <= 0:
-        for chiave, potenza in POTENZE_IMPIANTI_KWP.items():
-            if chiave.lower() in nome_impianto.lower():
-                cap = potenza
-                break
-        if cap <= 0:
-            cap = 100.0 # Default prudenziale
-
-    # 3. Coordinate geografiche tramite Open-Meteo Geocoding
+def ottieni_coordinate(nome_impianto: str):
+    """Ricava le coordinate geografiche dal nome dell'impianto tramite Open-Meteo Geocoding."""
     lat, lon = 45.95, 13.03 # Default Friuli
     parole = [p for p in nome_impianto.replace("-", " ").split() if p.lower() not in ["omnia", "immobiliare", "capannone", "nuovo", "scuola", "ponte", "rosso"]]
     for parola in parole:
@@ -176,13 +151,12 @@ def ottieni_potenza_e_coordinate(nome_impianto: str, api_capacity):
                         break
             except:
                 pass
+    return lat, lon
 
-    return cap, lat, lon
 
-
-def calcola_produzione_attesa_meteo(lat, lon, capacity_kwp) -> float:
-    """Calcola la produzione attesa basata sull'irraggiamento solare reale di ieri."""
-    if not lat or not lon or capacity_kwp <= 0:
+def get_irraggiamento_ieri(lat, lon) -> float:
+    """Restituisce solo il valore pulito dell'irraggiamento solare di ieri (kWh/m^2)."""
+    if not lat or not lon:
         return 0.0
 
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -202,11 +176,10 @@ def calcola_produzione_attesa_meteo(lat, lon, capacity_kwp) -> float:
             data = resp.json()
             rad_mj = data.get("daily", {}).get("shortwave_radiation_sum", [0])[0]
             if rad_mj is not None:
-                irradiance_kwh_m2 = rad_mj / 3.6  # Conversione da MJ/m^2 a kWh/m^2
-                expected_kwh = capacity_kwp * irradiance_kwh_m2 * 0.75 # PR = 0.75
-                return round(expected_kwh, 2)
+                # Conversione secca da MJ/m^2 a kWh/m^2 (1 kWh = 3.6 MJ)
+                return round(rad_mj / 3.6, 2)
     except Exception as e:
-        logging.warning(f"Errore meteo: {e}")
+        logging.warning(f"Errore meteo irraggiamento: {e}")
 
     return 0.0
 
@@ -216,7 +189,7 @@ class PDFReport(FPDF):
         self.set_font("Arial", "B", 13)
         self.cell(0, 8, "Report Stato Impianti & Meteo FusionSolar", border=0, ln=True, align="C")
         self.set_font("Arial", "I", 8)
-        self.cell(0, 5, "Confronto Produzione Reale vs Stima Meteo di Ieri", border=0, ln=True, align="C")
+        self.cell(0, 5, "Produzione Reale di Ieri vs Irraggiamento Solare", border=0, ln=True, align="C")
         self.ln(4)
 
     def footer(self):
@@ -238,7 +211,7 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
     pdf.set_font("Arial", "B", 8)
     pdf.cell(70, 8, "Nome Impianto", border=1)
     pdf.cell(30, 8, "Reale (kWh)", border=1, align="C")
-    pdf.cell(30, 8, "Attesa Meteo", border=1, align="C")
+    pdf.cell(30, 8, "Irrag. (kWh/m2)", border=1, align="C")
     pdf.cell(60, 8, "Stato / Errori", border=1, ln=True, align="C")
 
     for st in stations:
@@ -246,18 +219,17 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
         nome_raw = st.get("stationName", "N/D")
         nome = pulisci_testo(nome_raw)[:38]
         
-        api_cap = st.get("capacity") or st.get("capacityKwp")
-        capacity_kwp, lat, lon = ottieni_potenza_e_coordinate(nome_raw, api_cap)
+        lat, lon = ottieni_coordinate(nome_raw)
 
-        # Produzione Reale
+        # Produzione Reale di Ieri
         prod_reale_val = kpi_map.get(station_code, 0.0)
         prod_reale_str = f"{prod_reale_val:,.2f}".replace(",", " ")
 
-        # Produzione Attesa Meteo corretta con la potenza kWp reale
-        prod_attesa_val = calcola_produzione_attesa_meteo(lat, lon, capacity_kwp)
-        prod_attesa_str = f"{prod_attesa_val:,.2f}".replace(",", " ") if prod_attesa_val > 0 else "N/D"
+        # Solo valore irraggiamento solare puro
+        irraggiamento_val = get_irraggiamento_ieri(lat, lon)
+        irraggiamento_str = f"{irraggiamento_val:,.2f}".replace(",", " ") if irraggiamento_val > 0 else "N/D"
 
-        # Stato Errori
+        # Stato ed Errori
         if station_code in alarms_map and alarms_map[station_code]:
             stato_errore = pulisci_testo(alarms_map[station_code])[:32]
             ha_errore = True
@@ -268,7 +240,7 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
         pdf.set_font("Arial", size=8)
         pdf.cell(70, 7, nome, border=1)
         pdf.cell(30, 7, prod_reale_str, border=1, align="C")
-        pdf.cell(30, 7, prod_attesa_str, border=1, align="C")
+        pdf.cell(30, 7, irraggiamento_str, border=1, align="C")
         
         if ha_errore:
             pdf.set_font("Arial", "B", 8)
