@@ -92,10 +92,11 @@ class FusionSolarAPI:
 
         url = f"{self.base_url}/getKpiStationDay"
         
-        # Timestamp della mezzanotte del giorno prima
-        yesterday = datetime.utcnow() - timedelta(days=1)
-        yesterday_start = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
-        collect_time = int(yesterday_start.timestamp() * 1000)
+        # Mezzanotte di ieri in millisecondi
+        now = datetime.now()
+        yesterday = now - timedelta(days=1)
+        yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
+        collect_time = int(yesterday_midnight.timestamp() * 1000)
 
         payload = {
             "stationCodes": ",".join(station_codes),
@@ -115,18 +116,24 @@ class FusionSolarAPI:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
                     
-                    # 'product_power' è il campo Huawei corretto per l'energia giornaliera accumulata
-                    power = (
-                        data_dict.get("product_power") or 
-                        data_dict.get("day_power") or 
-                        data_dict.get("inverter_power") or 
-                        0.0
+                    # Estrazione e controllo dei campi energia di Huawei
+                    # 'day_power' o 'product_power' rappresentano i kWh generati nell'arco della giornata
+                    val = (
+                        data_dict.get("day_power") if data_dict.get("day_power") is not None
+                        else data_dict.get("product_power") if data_dict.get("product_power") is not None
+                        else data_dict.get("theory_power") if data_dict.get("theory_power") is not None
+                        else 0.0
                     )
-                    
+
+                    try:
+                        power_float = float(val)
+                    except (ValueError, TypeError):
+                        power_float = 0.0
+
                     if code:
-                        kpi_map[code] = str(round(float(power), 2))
+                        kpi_map[code] = f"{power_float:,.2f}".replace(",", " ")
             else:
-                logging.warning(f"Chiamata KPI Day completata con esito: {data.get('failCode')}")
+                logging.warning(f"Chiamata KPI Day fallita per alcuni impianti: {data.get('failCode')}")
 
         except Exception as e:
             logging.error(f"Errore nel recupero dati di produzione: {e}")
@@ -217,7 +224,7 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
         nome = pulisci_testo(st.get("stationName", "N/D"))[:45]
         
         # Produzione Ieri
-        prod_ieri = kpi_map.get(station_code, "0.0")
+        prod_ieri = kpi_map.get(station_code, "0.00")
         
         # Determina lo stato dell'errore
         if station_code in alarms_map and alarms_map[station_code]:
@@ -267,11 +274,11 @@ def main():
     kpi_map = {}
     alarms_map = {}
     
-    # 3. Recupera Produzione Ieri e Allarmi a blocchi da 50 impianti
-    chunk_size = 50
+    # 3. Richiesta a blocchi piccoli (20 impianti per volta) per non saturare l'API Huawei
+    chunk_size = 20
     for i in range(0, len(all_station_codes), chunk_size):
         chunk = all_station_codes[i:i + chunk_size]
-        logging.info(f"Elaborazione blocco impianti {i+1}-{i+len(chunk)}...")
+        logging.info(f"Elaborazione blocco impianti {i+1}-{i+len(chunk)} di {len(all_station_codes)}...")
         
         # Dati produzione ieri
         chunk_kpi = api.get_yesterday_kpi(chunk)
