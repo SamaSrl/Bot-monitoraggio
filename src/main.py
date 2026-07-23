@@ -5,15 +5,14 @@ import json
 API_USER = os.environ.get("FUSIONSOLAR_API_USER")
 API_KEY = os.environ.get("FUSIONSOLAR_API_KEY")
 
-# Lista completa degli endpoint Northbound Huawei
-API_HOSTS = [
-    "https://intl.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://eu5.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://uni001eu5.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://region003.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://sg5.fusionsolar.huawei.com/thirdstation/v1.0"
-]
+# Host identificato dal tuo login web
+BASE_HOST = "https://uni004eu5.fusionsolar.huawei.com"
 
+# In base alla versione attiva sul tuo account, il percorso di login varia:
+ENDPOINTS_TO_TEST = [
+    f"{BASE_HOST}/thirdstation/v1.0/login",
+    f"{BASE_HOST}/rest/openapi/pvms/v1/login"
+]
 def write_github_summary(content):
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_file:
