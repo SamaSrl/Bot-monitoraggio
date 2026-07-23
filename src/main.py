@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fpdf import FPDF
 
 # Configurazione Logging
@@ -84,18 +84,18 @@ class FusionSolarAPI:
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
         """
-        Recupera la produzione reale (kWh) del giorno precedente per gli impianti.
-        Formatta collectTime sia come timestamp MS sia come formato YYYYMMDD.
+        Recupera la produzione totale (kWh) del giorno precedente.
+        Formatta collectTime calcolando il timestamp UTC di ieri alle 00:00:00.
         """
         if not self.xsrf_token or not station_codes:
             return {}
 
         url = f"{self.base_url}/getKpiStationDay"
         
-        yesterday = datetime.now() - timedelta(days=1)
-        
-        # Prova formato timestamp Unix in millisecondi a inizio giornata
-        yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
+        # Calcolo inizio giornata di ieri in UTC millisecondi
+        now_utc = datetime.now(timezone.utc)
+        yesterday_utc = now_utc - timedelta(days=1)
+        yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0, tzinfo=timezone.utc)
         collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
 
         payload = {
@@ -116,23 +116,22 @@ class FusionSolarAPI:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
                     
-                    # Estrazione dei campi di produzione Huawei
-                    val = (
-                        data_dict.get("product_power") 
-                        or data_dict.get("day_power") 
-                        or data_dict.get("inverter_power") 
-                        or 0.0
-                    )
+                    # Estrazione e fallback tra le varie chiavi di produzione della risposta Huawei Northbound
+                    val = None
+                    for key in ["inverter_power", "product_power", "day_power", "theory_power", "use_power"]:
+                        if key in data_dict and data_dict[key] is not None:
+                            val = data_dict[key]
+                            break
 
                     try:
-                        power_float = float(val)
+                        power_float = float(val) if val is not None else 0.0
                     except (ValueError, TypeError):
                         power_float = 0.0
 
                     if code:
                         kpi_map[code] = power_float
             else:
-                logging.warning(f"Chiamata KPI Day fallita: {data.get('failCode')}")
+                logging.warning(f"Chiamata KPI Day con codice esito: {data.get('failCode')}")
 
         except Exception as e:
             logging.error(f"Errore nel recupero dati di produzione: {e}")
@@ -182,13 +181,44 @@ class FusionSolarAPI:
         return alarms_map
 
 
+def ottieni_coordinate_da_nome(nome_impianto: str):
+    """
+    Se l'API Huawei non fornisce le coordinate lat/lon, cerca il comune dal nome dell'impianto
+    usando la geocodifica gratuita di Open-Meteo.
+    """
+    if not nome_impianto:
+        return None, None
+
+    # Tenta di estrarre parole rilevanti escludendo prefissi come 'Omnia', 'Immobiliare', 'Capannone'
+    parole = [p for p in nome_impianto.replace("-", " ").split() if p.lower() not in ["omnia", "immobiliare", "capannone", "nuovo", "scuola"]]
+    
+    for parola in parole:
+        if len(parola) < 3:
+            continue
+        try:
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={parola}&count=1&language=it&format=json"
+            resp = requests.get(geo_url, timeout=5)
+            if resp.status_code == 200:
+                results = resp.json().get("results")
+                if results and len(results) > 0:
+                    return results[0].get("latitude"), results[0].get("longitude")
+        except Exception:
+            pass
+            
+    # Coordinate di fallback nel caso nessun nome coincida (Friuli / Centro-Nord Italia default)
+    return 45.95, 13.03
+
+
 def calcola_produzione_attesa_meteo(lat, lon, capacity_kwp) -> float:
     """
     Calcola la produzione teorica attesa (kWh) in base alla radiazione solare reale di ieri.
     Usa l'API Open-Meteo Historical Weather.
     """
-    if not lat or not lon or not capacity_kwp:
+    if not lat or not lon:
         return 0.0
+
+    # Se la capacità non è dichiarata dall'API Huawei, impostiamo un valore standard stimato
+    cap = float(capacity_kwp) if capacity_kwp and float(capacity_kwp) > 0 else 500.0
 
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     
@@ -208,14 +238,14 @@ def calcola_produzione_attesa_meteo(lat, lon, capacity_kwp) -> float:
             data = resp.json()
             rad_mj = data.get("daily", {}).get("shortwave_radiation_sum", [0])[0]
             if rad_mj is not None:
-                # Convertiamo MJ/m^2 in kWh/m^2 (1 kWh = 3.6 MJ)
+                # Conversione da MJ/m^2 a kWh/m^2 (1 kWh = 3.6 MJ)
                 irradiance_kwh_m2 = rad_mj / 3.6
                 
-                # Formula Stima: kWp * Irraggiamento (kWh/m^2) * Performance Ratio (0.75 default)
-                expected_kwh = capacity_kwp * irradiance_kwh_m2 * 0.75
+                # Produzione Attesa: Cap (kWp) * Irraggiamento (kWh/m^2) * Performance Ratio (0.75)
+                expected_kwh = cap * irradiance_kwh_m2 * 0.75
                 return round(expected_kwh, 2)
     except Exception as e:
-        logging.warning(f"Impossibile recuperare il meteo per lat={lat}, lon={lon}: {e}")
+        logging.warning(f"Errore recupero meteo: {e}")
 
     return 0.0
 
@@ -241,12 +271,11 @@ def pulisci_testo(testo: str) -> str:
 
 
 def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti.pdf"):
-    """Genera e formatta il report PDF completo con meteo e stato."""
+    """Genera e formatta il report PDF con meteo e stato."""
     pdf = PDFReport()
     pdf.add_page()
 
-    # Intestazione Tabella (Larghezza totale ~190 mm)
-    # Nome (70mm) | Reale (30mm) | Attesa (30mm) | Stato/Errori (60mm)
+    # Intestazione Tabella
     pdf.set_font("Arial", "B", 8)
     pdf.cell(70, 8, "Nome Impianto", border=1)
     pdf.cell(30, 8, "Reale (kWh)", border=1, align="C")
@@ -255,18 +284,23 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
 
     for st in stations:
         station_code = st.get("stationCode", "")
-        nome = pulisci_testo(st.get("stationName", "N/D"))[:38]
+        nome_raw = st.get("stationName", "N/D")
+        nome = pulisci_testo(nome_raw)[:38]
         
-        # Coordinate e capacità dell'impianto fornite da Huawei
-        lat = st.get("latitude")
-        lon = st.get("longitude")
-        capacity = float(st.get("capacity", 0))
+        # Gestione lat/lon da Huawei o da Geocoding automatico
+        lat = st.get("latitude") or st.get("lat")
+        lon = st.get("longitude") or st.get("lon")
+        
+        if not lat or not lon:
+            lat, lon = ottieni_coordinate_da_nome(nome_raw)
+
+        capacity = st.get("capacity") or st.get("capacityKwp")
 
         # Produzione Reale
         prod_reale_val = kpi_map.get(station_code, 0.0)
         prod_reale_str = f"{prod_reale_val:,.2f}".replace(",", " ")
 
-        # Produzione Attesa calcolata dal meteo
+        # Produzione Attesa Meteo
         prod_attesa_val = calcola_produzione_attesa_meteo(lat, lon, capacity)
         prod_attesa_str = f"{prod_attesa_val:,.2f}".replace(",", " ") if prod_attesa_val > 0 else "N/D"
 
@@ -316,6 +350,7 @@ def main():
     kpi_map = {}
     alarms_map = {}
     
+    # Interroghiamo a blocchi di 20 impianti
     chunk_size = 20
     for i in range(0, len(all_station_codes), chunk_size):
         chunk = all_station_codes[i:i + chunk_size]
