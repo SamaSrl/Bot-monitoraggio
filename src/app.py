@@ -6,6 +6,29 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import streamlit as st
 
+# --- SISTEMA DI PASSWORD (Opzionale, commentalo se non lo vuoi) ---
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "LA_TUA_PASSWORD_SEGRETA":  # Cambia qui la tua password
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("Inserisci la password per accedere all'app:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Inserisci la password per accedere all'app:", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password errata")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+# -----------------------------------------------------------------
+
 st.set_page_config(
     page_title="FusionSolar Web App Manager", 
     page_icon="☀️", 
@@ -56,55 +79,53 @@ class FusionSolarAPI:
         return []
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
-    """
-    Estrae la produzione reale di ieri interrogando i KPI di Huawei.
-    Usa la mezzanotte esatta UTC del giorno precedente per evitare disallineamenti di fuso orario.
-    """
-    if not self.xsrf_token or not station_codes:
-        return {}
+        """
+        Estrae la produzione reale di ieri interrogando i KPI di Huawei.
+        Usa la mezzanotte esatta UTC del giorno precedente per evitare disallineamenti.
+        """
+        if not self.xsrf_token or not station_codes:
+            return {}
 
-    url = f"{self.base_url}/getKpiStationDay"
-    
-    # Calcolo mezzanotte UTC di ieri
-    now_utc = datetime.utcnow()
-    yesterday_utc = now_utc - timedelta(days=1)
-    yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0)
-    collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
+        url = f"{self.base_url}/getKpiStationDay"
+        
+        now_utc = datetime.utcnow()
+        yesterday_utc = now_utc - timedelta(days=1)
+        yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0)
+        collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
 
-    payload = {
-        "stationCodes": ",".join(station_codes),
-        "collectTime": collect_time_ms
-    }
+        payload = {
+            "stationCodes": ",".join(station_codes),
+            "collectTime": collect_time_ms
+        }
 
-    kpi_map = {}
-    try:
-        response = self.session.post(url, json=payload, timeout=20)
-        response.raise_for_status()
-        data = response.json()
+        kpi_map = {}
+        try:
+            response = self.session.post(url, json=payload, timeout=20)
+            response.raise_for_status()
+            data = response.json()
 
-        if data.get("success"):
-            for item in data.get("data", []):
-                code = item.get("stationCode")
-                data_dict = item.get("dataItemMap", {})
-                
-                # Cerca il valore tra le chiavi standard restituite da FusionSolar
-                val = (
-                    data_dict.get("day_power") 
-                    if data_dict.get("day_power") is not None
-                    else data_dict.get("product_power")
-                )
-                
-                if val is None:
-                    val = data_dict.get("inverter_power", 0.0)
+            if data.get("success"):
+                for item in data.get("data", []):
+                    code = item.get("stationCode")
+                    data_dict = item.get("dataItemMap", {})
+                    
+                    val = (
+                        data_dict.get("day_power") 
+                        if data_dict.get("day_power") is not None
+                        else data_dict.get("product_power")
+                    )
+                    
+                    if val is None:
+                        val = data_dict.get("inverter_power", 0.0)
 
-                try:
-                    kpi_map[code] = float(val)
-                except (ValueError, TypeError):
-                    kpi_map[code] = 0.0
-    except Exception as e:
-        logging.error(f"Errore recupero KPI ieri: {e}")
+                    try:
+                        kpi_map[code] = float(val)
+                    except (ValueError, TypeError):
+                        kpi_map[code] = 0.0
+        except Exception as e:
+            logging.error(f"Errore recupero KPI ieri: {e}")
 
-    return kpi_map
+        return kpi_map
 
     def get_active_alarms(self, station_codes: list) -> dict:
         if not self.xsrf_token or not station_codes:
@@ -139,7 +160,6 @@ class FusionSolarAPI:
 
 
 def get_meteo_giornaliero(lat, lon) -> float:
-    """Interroga Open-Meteo per l'irraggiamento solare di ieri (kWh/m^2)."""
     if not lat or not lon:
         return 0.0
 
@@ -223,7 +243,6 @@ st.title("☀️ Gestione Impianti & Report FusionSolar")
 
 api = FusionSolarAPI(BASE_URL, API_USER, API_PASS)
 
-# Funzione per generare i valori predefiniti intelligenti
 def crea_riga_impianto(s):
     nome = s.get("stationName", "N/D")
     code = s.get("stationCode", "")
@@ -247,7 +266,6 @@ def crea_riga_impianto(s):
         "Azimut (°)": azimut_default
     }
 
-# Inizializzazione sessione impianti
 if "stations_data" not in st.session_state:
     with st.spinner("Connessione iniziale a FusionSolar..."):
         if api.login():
@@ -256,7 +274,6 @@ if "stations_data" not in st.session_state:
         else:
             st.session_state["stations_data"] = []
 
-# --- COLONNA DI CONTROLLO: TASTO AGGIUNGI IMPIANTI ---
 col1, col2 = st.columns([3, 1])
 with col2:
     if st.button("🔄 Sincronizza Nuovi Impianti", use_container_width=True):
@@ -270,12 +287,12 @@ with col2:
                     if s.get("stationCode") not in codici_esistenti:
                         st.session_state["stations_data"].append(crea_riga_impianto(s))
                         aggiunti += 1
-                st.success(f"Sincronizzazione completata! Aggiunti {aggiunti} nuovi impianti (i vecchi dati modificati sono salvi).")
+                st.success(f"Sincronizzazione completata! Aggiunti {aggiunti} nuovi impianti.")
                 st.rerun()
 
 if st.session_state["stations_data"]:
     st.subheader("📋 Tabella Parametri Impianti")
-    st.info("Puoi modificare liberamente le celle. Cliccando su 'Sincronizza Nuovi Impianti' eventuali tetti nuovi verranno aggiunti in fondo senza perdere le tue modifiche.")
+    st.info("Modifica i dati se necessario. I nuovi impianti aggiunti da Huawei appariranno in fondo senza cancellare le modifiche.")
     
     edited_df = st.data_editor(
         st.session_state["stations_data"],
@@ -296,7 +313,6 @@ if st.session_state["stations_data"]:
                 alarms_map = api.get_active_alarms(codes)
 
                 risultati = []
-                # Aggiorniamo lo stato in memoria con le modifiche fatte dall'utente nella tabella
                 st.session_state["stations_data"] = edited_df
 
                 for row in edited_df:
