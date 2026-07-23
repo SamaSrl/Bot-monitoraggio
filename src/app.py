@@ -56,53 +56,55 @@ class FusionSolarAPI:
         return []
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
-        """
-        Estrae la produzione reale di ieri in modo pulito e consolidato.
-        Usa il timestamp calcolato sulla mezzanotte esatta di ieri.
-        """
-        if not self.xsrf_token or not station_codes:
-            return {}
+    """
+    Estrae la produzione reale di ieri interrogando i KPI di Huawei.
+    Usa la mezzanotte esatta UTC del giorno precedente per evitare disallineamenti di fuso orario.
+    """
+    if not self.xsrf_token or not station_codes:
+        return {}
 
-        url = f"{self.base_url}/getKpiStationDay"
-        
-        # Definiamo la mezzanotte esatta di ieri
-        yesterday = datetime.now() - timedelta(days=1)
-        yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
-        collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
+    url = f"{self.base_url}/getKpiStationDay"
+    
+    # Calcolo mezzanotte UTC di ieri
+    now_utc = datetime.utcnow()
+    yesterday_utc = now_utc - timedelta(days=1)
+    yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0)
+    collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
 
-        payload = {
-            "stationCodes": ",".join(station_codes),
-            "collectTime": collect_time_ms
-        }
+    payload = {
+        "stationCodes": ",".join(station_codes),
+        "collectTime": collect_time_ms
+    }
 
-        kpi_map = {}
-        try:
-            response = self.session.post(url, json=payload, timeout=20)
-            response.raise_for_status()
-            data = response.json()
+    kpi_map = {}
+    try:
+        response = self.session.post(url, json=payload, timeout=20)
+        response.raise_for_status()
+        data = response.json()
 
-            if data.get("success"):
-                for item in data.get("data", []):
-                    code = item.get("stationCode")
-                    data_dict = item.get("dataItemMap", {})
-                    
-                    # Cerca prima il dato giornaliero specifico, poi gli accumulatori validi
-                    val = (
-                        data_dict.get("day_power") 
-                        or data_dict.get("product_power") 
-                        or data_dict.get("inverter_power") 
-                        or 0.0
-                    )
-                    try:
-                        val_float = float(val)
-                        # Se per errore dovesse restituire i watt anziché i kWh o valori anomali
-                        kpi_map[code] = val_float
-                    except:
-                        kpi_map[code] = 0.0
-        except Exception as e:
-            logging.error(f"Errore KPI: {e}")
+        if data.get("success"):
+            for item in data.get("data", []):
+                code = item.get("stationCode")
+                data_dict = item.get("dataItemMap", {})
+                
+                # Cerca il valore tra le chiavi standard restituite da FusionSolar
+                val = (
+                    data_dict.get("day_power") 
+                    if data_dict.get("day_power") is not None
+                    else data_dict.get("product_power")
+                )
+                
+                if val is None:
+                    val = data_dict.get("inverter_power", 0.0)
 
-        return kpi_map
+                try:
+                    kpi_map[code] = float(val)
+                except (ValueError, TypeError):
+                    kpi_map[code] = 0.0
+    except Exception as e:
+        logging.error(f"Errore recupero KPI ieri: {e}")
+
+    return kpi_map
 
     def get_active_alarms(self, station_codes: list) -> dict:
         if not self.xsrf_token or not station_codes:
