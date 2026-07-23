@@ -1,31 +1,30 @@
-name: Bot Monitoraggio FusionSolar
+name: FusionSolar Data Fetcher
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 */1 * * *'  # Esegue lo script ogni ora
+  workflow_dispatch:        # Permette l'avvio manuale dal pannello GitHub
 
 jobs:
-  run-bot:
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del codice
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Configura Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Installa dipendenze
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
+          pip install requests
 
-      - name: Esegui il Bot di Monitoraggio API
+      - name: Esegui main.py
         env:
           FUSIONSOLAR_API_USER: ${{ secrets.FUSIONSOLAR_API_USER }}
           FUSIONSOLAR_API_KEY: ${{ secrets.FUSIONSOLAR_API_KEY }}
-        run: |
-          python src/main.py
+        run: python main.py
