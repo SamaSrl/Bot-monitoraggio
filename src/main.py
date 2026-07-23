@@ -2,67 +2,73 @@ import os
 import requests
 import json
 
-# Credenziali API registrate nei Secret di GitHub
 API_USER = os.environ.get("FUSIONSOLAR_API_USER")
 API_KEY = os.environ.get("FUSIONSOLAR_API_KEY")
-
-# URL API Northbound Huawei (Region Europe - EU5)
 BASE_URL = "https://eu5.fusionsolar.huawei.com/thirdstation/v1.0"
 
 def main():
     if not API_USER or not API_KEY:
-        print("[-] Errore: Credenziali API (FUSIONSOLAR_API_USER / FUSIONSOLAR_API_KEY) mancanti nei Secrets di GitHub.")
+        print("[-] Errore: Credenziali FUSIONSOLAR_API_USER o FUSIONSOLAR_API_KEY non trovate.")
         return
 
-    print("[*] Avvio Bot Monitoraggio FusionSolar via API Northbound...")
+    print("[*] Avvio estrazione dati impianti FusionSolar...")
     session = requests.Session()
-    
-    # Intestazioni standard per le chiamate REST
-    session.headers.update({
-        "Content-Type": "application/json"
-    })
+    session.headers.update({"Content-Type": "application/json"})
 
-    # --- STEP 1: AUTENTICAZIONE API ---
-    login_url = f"{BASE_URL}/login"
-    payload = {
-        "systemCode": API_USER,
-        "secretKey": API_KEY
+    report_data = {
+        "status": "error",
+        "stations": [],
+        "errors": []
     }
 
     try:
-        print(f"[*] Richiesta di Login API su {login_url}...")
-        response = session.post(login_url, json=payload, timeout=30)
-        res_data = response.json()
-
-        if res_data.get("failCode") != 0 and not res_data.get("success", False):
-            print(f"[-] Errore di autenticazione API: {res_data}")
-            return
-
-        # Estrazione del token CSRF dagli header se presente
-        xsrf_token = response.headers.get("XSRF-TOKEN")
+        # --- 1. LOGIN API ---
+        print("[*] Autenticazione in corso...")
+        login_res = session.post(f"{BASE_URL}/login", json={
+            "systemCode": API_USER,
+            "secretKey": API_KEY
+        }, timeout=30)
+        
+        login_json = login_res.json()
+        
+        # Gestione del token XSRF se fornito negli header
+        xsrf_token = login_res.headers.get("XSRF-TOKEN")
         if xsrf_token:
             session.headers.update({"XSRF-TOKEN": xsrf_token})
 
-        print("[+] Autenticazione API riuscita!")
+        if login_json.get("failCode") != 0 and not login_json.get("success", False):
+            print(f"[-] Errore Login API: {login_json}")
+            report_data["errors"].append({"step": "login", "details": login_json})
+        else:
+            print("[+] Login API effettuato con successo!")
+            report_data["status"] = "success"
 
-        # --- STEP 2: RECUPERO LISTA IMPIANTI (STATIONS) ---
-        print("[*] Recupero lista degli impianti...")
-        stations_url = f"{BASE_URL}/station/list"
-        
-        # Paginazione standard API Huawei
-        stations_res = session.post(stations_url, json={"pageNo": 1}, timeout=30)
-        stations_data = stations_res.json()
+            # --- 2. RECUPERO LISTA IMPIANTI ---
+            print("[*] Richiesta lista impianti...")
+            stations_res = session.post(f"{BASE_URL}/station/list", json={"pageNo": 1}, timeout=30)
+            stations_json = stations_res.json()
 
-        print("\n=== RISULTATO DATI IMPIANTI ===")
-        print(json.dumps(stations_data, indent=2, ensure_ascii=False))
+            if stations_json.get("failCode") == 0 or stations_json.get("success", False):
+                report_data["stations"] = stations_json.get("data", [])
+                print(f"[+] Trovati {len(report_data['stations'])} impianti.")
+            else:
+                print(f"[!] Errore recupero impianti: {stations_json}")
+                report_data["errors"].append({"step": "get_stations", "details": stations_json})
 
-        # --- STEP 3: LOGOUT (Buona norma per non consumare la quota di sessioni) ---
-        logout_url = f"{BASE_URL}/logout"
-        session.post(logout_url, timeout=10)
-        print("\n[+] Sessione API chiusa correttamente.")
+            # --- 3. LOGOUT ---
+            session.post(f"{BASE_URL}/logout", timeout=10)
+            print("[*] Sessione API chiusa.")
 
     except Exception as e:
-        print(f"[-] Errore durante la chiamata API: {e}")
+        print(f"[-] Eccezione durante l'esecuzione: {e}")
+        report_data["errors"].append({"step": "exception", "message": str(e)})
+
+    # --- 4. SALVATAGGIO FILE JSON ---
+    output_filename = "report_impianti.json"
+    with open(output_filename, "w", encoding="utf-8") as f:
+        json.dump(report_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"[+] File '{output_filename}' generato con successo!")
 
 if __name__ == "__main__":
     main()
