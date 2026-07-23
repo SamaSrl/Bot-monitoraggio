@@ -13,7 +13,10 @@ def main():
 
     print("[*] Avvio estrazione dati impianti FusionSolar...")
     session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
+    session.headers.update({
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    })
 
     report_data = {
         "status": "error",
@@ -29,35 +32,39 @@ def main():
             "secretKey": API_KEY
         }, timeout=30)
         
-        login_json = login_res.json()
-        
-        # Gestione del token XSRF se fornito negli header
+        print(f"[*] Codice Risposta HTTP: {login_res.status_code}")
+
+        try:
+            login_json = login_res.json()
+        except Exception:
+            login_json = {"raw_response": login_res.text[:500]}
+            print(f"[-] Risposta non JSON dal server: {login_res.text[:200]}")
+
         xsrf_token = login_res.headers.get("XSRF-TOKEN")
         if xsrf_token:
             session.headers.update({"XSRF-TOKEN": xsrf_token})
 
-        if login_json.get("failCode") != 0 and not login_json.get("success", False):
-            print(f"[-] Errore Login API: {login_json}")
-            report_data["errors"].append({"step": "login", "details": login_json})
-        else:
+        if isinstance(login_json, dict) and (login_json.get("failCode") == 0 or login_json.get("success") is True):
             print("[+] Login API effettuato con successo!")
             report_data["status"] = "success"
 
             # --- 2. RECUPERO LISTA IMPIANTI ---
             print("[*] Richiesta lista impianti...")
             stations_res = session.post(f"{BASE_URL}/station/list", json={"pageNo": 1}, timeout=30)
-            stations_json = stations_res.json()
-
-            if stations_json.get("failCode") == 0 or stations_json.get("success", False):
+            
+            try:
+                stations_json = stations_res.json()
                 report_data["stations"] = stations_json.get("data", [])
                 print(f"[+] Trovati {len(report_data['stations'])} impianti.")
-            else:
-                print(f"[!] Errore recupero impianti: {stations_json}")
-                report_data["errors"].append({"step": "get_stations", "details": stations_json})
+            except Exception:
+                report_data["errors"].append({"step": "get_stations", "response": stations_res.text[:500]})
 
             # --- 3. LOGOUT ---
             session.post(f"{BASE_URL}/logout", timeout=10)
             print("[*] Sessione API chiusa.")
+        else:
+            print(f"[-] Dettagli Errore Login: {login_json}")
+            report_data["errors"].append({"step": "login", "details": login_json})
 
     except Exception as e:
         print(f"[-] Eccezione durante l'esecuzione: {e}")
