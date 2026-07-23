@@ -84,23 +84,23 @@ class FusionSolarAPI:
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
         """
-        Recupera la produzione totale (kWh) del giorno precedente per gli impianti.
-        Ritorna un dizionario: { stationCode: "6290.0" }
+        Recupera la produzione reale (kWh) del giorno precedente per gli impianti.
+        Formatta collectTime sia come timestamp MS sia come formato YYYYMMDD.
         """
         if not self.xsrf_token or not station_codes:
             return {}
 
         url = f"{self.base_url}/getKpiStationDay"
         
-        # Mezzanotte di ieri in millisecondi
-        now = datetime.now()
-        yesterday = now - timedelta(days=1)
+        yesterday = datetime.now() - timedelta(days=1)
+        
+        # Prova formato timestamp Unix in millisecondi a inizio giornata
         yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
-        collect_time = int(yesterday_midnight.timestamp() * 1000)
+        collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
 
         payload = {
             "stationCodes": ",".join(station_codes),
-            "collectTime": collect_time
+            "collectTime": collect_time_ms
         }
 
         kpi_map = {}
@@ -116,13 +116,12 @@ class FusionSolarAPI:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
                     
-                    # Estrazione e controllo dei campi energia di Huawei
-                    # 'day_power' o 'product_power' rappresentano i kWh generati nell'arco della giornata
+                    # Estrazione dei campi di produzione Huawei
                     val = (
-                        data_dict.get("day_power") if data_dict.get("day_power") is not None
-                        else data_dict.get("product_power") if data_dict.get("product_power") is not None
-                        else data_dict.get("theory_power") if data_dict.get("theory_power") is not None
-                        else 0.0
+                        data_dict.get("product_power") 
+                        or data_dict.get("day_power") 
+                        or data_dict.get("inverter_power") 
+                        or 0.0
                     )
 
                     try:
@@ -131,9 +130,9 @@ class FusionSolarAPI:
                         power_float = 0.0
 
                     if code:
-                        kpi_map[code] = f"{power_float:,.2f}".replace(",", " ")
+                        kpi_map[code] = power_float
             else:
-                logging.warning(f"Chiamata KPI Day fallita per alcuni impianti: {data.get('failCode')}")
+                logging.warning(f"Chiamata KPI Day fallita: {data.get('failCode')}")
 
         except Exception as e:
             logging.error(f"Errore nel recupero dati di produzione: {e}")
@@ -141,10 +140,7 @@ class FusionSolarAPI:
         return kpi_map
 
     def get_active_alarms(self, station_codes: list) -> dict:
-        """
-        Recupera gli allarmi attivi/non gestiti per la lista di impianti fornita.
-        Ritorna un dizionario: { stationCode: "Nome Errore / Descrizione" }
-        """
+        """Recupera gli allarmi attivi per la lista di impianti."""
         if not self.xsrf_token or not station_codes:
             return {}
 
@@ -158,7 +154,7 @@ class FusionSolarAPI:
             "stationCodes": ",".join(station_codes),
             "beginTime": begin_time,
             "endTime": end_time,
-            "status": 1  # 1 = allarmi attivi
+            "status": 1
         }
 
         alarms_map = {}
@@ -186,13 +182,51 @@ class FusionSolarAPI:
         return alarms_map
 
 
+def calcola_produzione_attesa_meteo(lat, lon, capacity_kwp) -> float:
+    """
+    Calcola la produzione teorica attesa (kWh) in base alla radiazione solare reale di ieri.
+    Usa l'API Open-Meteo Historical Weather.
+    """
+    if not lat or not lon or not capacity_kwp:
+        return 0.0
+
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "start_date": yesterday_str,
+        "end_date": yesterday_str,
+        "daily": "shortwave_radiation_sum",
+        "timezone": "auto"
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            rad_mj = data.get("daily", {}).get("shortwave_radiation_sum", [0])[0]
+            if rad_mj is not None:
+                # Convertiamo MJ/m^2 in kWh/m^2 (1 kWh = 3.6 MJ)
+                irradiance_kwh_m2 = rad_mj / 3.6
+                
+                # Formula Stima: kWp * Irraggiamento (kWh/m^2) * Performance Ratio (0.75 default)
+                expected_kwh = capacity_kwp * irradiance_kwh_m2 * 0.75
+                return round(expected_kwh, 2)
+    except Exception as e:
+        logging.warning(f"Impossibile recuperare il meteo per lat={lat}, lon={lon}: {e}")
+
+    return 0.0
+
+
 class PDFReport(FPDF):
     def header(self):
-        self.set_font("Arial", "B", 14)
-        self.cell(0, 10, "Report Stato Impianti FusionSolar", border=0, ln=True, align="C")
-        self.set_font("Arial", "I", 9)
-        self.cell(0, 5, "Estrazione automatica via OpenAPI Northbound", border=0, ln=True, align="C")
-        self.ln(5)
+        self.set_font("Arial", "B", 13)
+        self.cell(0, 8, "Report Stato Impianti & Meteo FusionSolar", border=0, ln=True, align="C")
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 5, "Confronto Produzione Reale vs Stima Meteo di Ieri", border=0, ln=True, align="C")
+        self.ln(4)
 
     def footer(self):
         self.set_y(-15)
@@ -201,51 +235,61 @@ class PDFReport(FPDF):
 
 
 def pulisci_testo(testo: str) -> str:
-    """Rimuove caratteri speciali non supportati dal font Latin-1 di FPDF."""
     if not testo:
         return ""
     return str(testo).encode('latin-1', 'replace').decode('latin-1')
 
 
 def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti.pdf"):
-    """Genera e formatta il report PDF con Nome, Produzione Ieri e Stato/Errori."""
+    """Genera e formatta il report PDF completo con meteo e stato."""
     pdf = PDFReport()
     pdf.add_page()
 
-    # Intestazione Tabella (A4 = 190 mm larghezza utile)
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(90, 8, "Nome Impianto", border=1)
-    pdf.cell(35, 8, "Prod. Ieri (kWh)", border=1, align="C")
-    pdf.cell(65, 8, "Stato / Errori", border=1, ln=True, align="C")
+    # Intestazione Tabella (Larghezza totale ~190 mm)
+    # Nome (70mm) | Reale (30mm) | Attesa (30mm) | Stato/Errori (60mm)
+    pdf.set_font("Arial", "B", 8)
+    pdf.cell(70, 8, "Nome Impianto", border=1)
+    pdf.cell(30, 8, "Reale (kWh)", border=1, align="C")
+    pdf.cell(30, 8, "Attesa Meteo", border=1, align="C")
+    pdf.cell(60, 8, "Stato / Errori", border=1, ln=True, align="C")
 
-    # Contenuto Tabella
     for st in stations:
         station_code = st.get("stationCode", "")
-        nome = pulisci_testo(st.get("stationName", "N/D"))[:45]
+        nome = pulisci_testo(st.get("stationName", "N/D"))[:38]
         
-        # Produzione Ieri
-        prod_ieri = kpi_map.get(station_code, "0.00")
-        
-        # Determina lo stato dell'errore
+        # Coordinate e capacità dell'impianto fornite da Huawei
+        lat = st.get("latitude")
+        lon = st.get("longitude")
+        capacity = float(st.get("capacity", 0))
+
+        # Produzione Reale
+        prod_reale_val = kpi_map.get(station_code, 0.0)
+        prod_reale_str = f"{prod_reale_val:,.2f}".replace(",", " ")
+
+        # Produzione Attesa calcolata dal meteo
+        prod_attesa_val = calcola_produzione_attesa_meteo(lat, lon, capacity)
+        prod_attesa_str = f"{prod_attesa_val:,.2f}".replace(",", " ") if prod_attesa_val > 0 else "N/D"
+
+        # Stato Errori
         if station_code in alarms_map and alarms_map[station_code]:
-            stato_errore = pulisci_testo(alarms_map[station_code])[:35]
+            stato_errore = pulisci_testo(alarms_map[station_code])[:32]
             ha_errore = True
         else:
             stato_errore = "OK"
             ha_errore = False
 
-        # Stampa riga
+        # Stampa riga PDF
         pdf.set_font("Arial", size=8)
-        pdf.cell(90, 7, nome, border=1)
-        pdf.cell(35, 7, prod_ieri, border=1, align="C")
+        pdf.cell(70, 7, nome, border=1)
+        pdf.cell(30, 7, prod_reale_str, border=1, align="C")
+        pdf.cell(30, 7, prod_attesa_str, border=1, align="C")
         
-        # Se c'è un errore lo mettiamo in grassetto
         if ha_errore:
             pdf.set_font("Arial", "B", 8)
-            pdf.cell(65, 7, stato_errore, border=1, ln=True)
+            pdf.cell(60, 7, stato_errore, border=1, ln=True)
         else:
             pdf.set_font("Arial", size=8)
-            pdf.cell(65, 7, stato_errore, border=1, ln=True, align="C")
+            pdf.cell(60, 7, stato_errore, border=1, ln=True, align="C")
 
     pdf.output(filename)
     logging.info(f"PDF generato con successo: '{filename}'")
@@ -258,12 +302,10 @@ def main():
         password=API_PASS
     )
 
-    # 1. Login
     if not api.login():
         logging.error("Procedura interrotta: login fallito.")
         return
 
-    # 2. Ottieni la lista impianti
     stations = api.get_station_list()
     if not stations:
         logging.warning("Nessun impianto trovato.")
@@ -274,21 +316,17 @@ def main():
     kpi_map = {}
     alarms_map = {}
     
-    # 3. Richiesta a blocchi piccoli (20 impianti per volta) per non saturare l'API Huawei
     chunk_size = 20
     for i in range(0, len(all_station_codes), chunk_size):
         chunk = all_station_codes[i:i + chunk_size]
-        logging.info(f"Elaborazione blocco impianti {i+1}-{i+len(chunk)} di {len(all_station_codes)}...")
+        logging.info(f"Elaborazione blocco {i+1}-{i+len(chunk)} di {len(all_station_codes)}...")
         
-        # Dati produzione ieri
         chunk_kpi = api.get_yesterday_kpi(chunk)
         kpi_map.update(chunk_kpi)
         
-        # Allarmi
         chunk_alarms = api.get_active_alarms(chunk)
         alarms_map.update(chunk_alarms)
 
-    # 4. Genera il report PDF completo
     genera_pdf_impianti(stations, kpi_map, alarms_map, "report_impianti.pdf")
 
 
