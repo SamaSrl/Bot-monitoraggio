@@ -24,6 +24,7 @@ jobs:
           pip install requests
 
       - name: Esegui main.py
+        working-directory: ./src   # <--- Metti qui il nome della tua cartella
         env:
           FUSIONSOLAR_API_USER: ${{ secrets.FUSIONSOLAR_API_USER }}
           FUSIONSOLAR_API_KEY: ${{ secrets.FUSIONSOLAR_API_KEY }}
