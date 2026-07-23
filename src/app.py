@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import streamlit as st
 
-# --- SISTEMA DI PASSWORD (Opzionale, commentalo se non lo vuoi) ---
+# --- SISTEMA DI PASSWORD ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "LA_TUA_PASSWORD_SEGRETA":  # Cambia qui la tua password
+        if st.session_state["password"] == "Spettacolo01!":  # Cambia qui la tua password se desideri
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
@@ -27,7 +27,7 @@ def check_password():
 
 if not check_password():
     st.stop()
-# -----------------------------------------------------------------
+# ---------------------------
 
 st.set_page_config(
     page_title="FusionSolar Web App Manager", 
@@ -80,27 +80,33 @@ class FusionSolarAPI:
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
         """
-        Estrae la produzione reale di ieri interrogando i KPI di Huawei.
-        Usa la mezzanotte esatta UTC del giorno precedente per evitare disallineamenti.
+        Estrae la produzione reale di ieri scaricando i KPI orari (getKpiStationHour)
+        e sommandoli per coprire l'intera giornata precedente in modo sicuro e preciso.
         """
         if not self.xsrf_token or not station_codes:
             return {}
 
-        url = f"{self.base_url}/getKpiStationDay"
+        url = f"{self.base_url}/getKpiStationHour"
         
-        now_utc = datetime.utcnow()
-        yesterday_utc = now_utc - timedelta(days=1)
-        yesterday_midnight = datetime(yesterday_utc.year, yesterday_utc.month, yesterday_utc.day, 0, 0, 0)
-        collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
+        now = datetime.now()
+        yesterday = now - timedelta(days=1)
+        
+        start_of_yesterday = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
+        end_of_yesterday = datetime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59)
+        
+        begin_time_ms = int(start_of_yesterday.timestamp() * 1000)
+        end_time_ms = int(end_of_yesterday.timestamp() * 1000)
 
         payload = {
             "stationCodes": ",".join(station_codes),
-            "collectTime": collect_time_ms
+            "beginTime": begin_time_ms,
+            "endTime": end_time_ms
         }
 
-        kpi_map = {}
+        kpi_map = {code: 0.0 for code in station_codes}
+        
         try:
-            response = self.session.post(url, json=payload, timeout=20)
+            response = self.session.post(url, json=payload, timeout=25)
             response.raise_for_status()
             data = response.json()
 
@@ -110,20 +116,21 @@ class FusionSolarAPI:
                     data_dict = item.get("dataItemMap", {})
                     
                     val = (
-                        data_dict.get("day_power") 
-                        if data_dict.get("day_power") is not None
-                        else data_dict.get("product_power")
+                        data_dict.get("plant_power") 
+                        or data_dict.get("product_power") 
+                        or data_dict.get("inverter_power") 
+                        or 0.0
                     )
                     
-                    if val is None:
-                        val = data_dict.get("inverter_power", 0.0)
-
                     try:
-                        kpi_map[code] = float(val)
+                        val_float = float(val)
                     except (ValueError, TypeError):
-                        kpi_map[code] = 0.0
+                        val_float = 0.0
+
+                    if code in kpi_map:
+                        kpi_map[code] += val_float
         except Exception as e:
-            logging.error(f"Errore recupero KPI ieri: {e}")
+            logging.error(f"Errore recupero KPI orari di ieri: {e}")
 
         return kpi_map
 
