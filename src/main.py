@@ -2,15 +2,8 @@ import os
 import requests
 import json
 
-# Recupero credenziali dai Secrets di GitHub
 API_USER = os.environ.get("FUSIONSOLAR_API_USER")
 API_KEY = os.environ.get("FUSIONSOLAR_API_KEY")
-
-# Endpoint Ufficiale OpenAPI per la regione EU5
-BASE_HOST = "https://eu5.fusionsolar.huawei.com"
-LOGIN_URL = f"{BASE_HOST}/rest/openapi/pvms/v1/login"
-STATION_LIST_URL = f"{BASE_HOST}/rest/openapi/pvms/v1/station/list"
-LOGOUT_URL = f"{BASE_HOST}/rest/openapi/pvms/v1/logout"
 
 def write_github_summary(content):
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -24,11 +17,10 @@ def main():
         print("[-] Errore: FUSIONSOLAR_API_USER o FUSIONSOLAR_API_KEY non definiti.", flush=True)
         return
 
-    # Pulizia automatica da eventuali spazi presi per errore nei secrets
     user_clean = API_USER.strip()
     key_clean = API_KEY.strip()
 
-    print(f"[*] Avvio connessione a FusionSolar EU5 per utente: '{user_clean}'...", flush=True)
+    print(f"[*] Avvio autenticazione per utente Northbound: '{user_clean}'...", flush=True)
     
     session = requests.Session()
     session.headers.update({
@@ -36,75 +28,101 @@ def main():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     })
 
-    # Payload UFFICIALE Huawei OpenAPI Northbound
-    payload = {
-        "userName": user_clean,
-        "systemCode": key_clean
-    }
+    # Combinazioni di Host, Endpoint e Payload usati da Huawei per utenti Northbound
+    tests = [
+        # Opzione A: Host nativo uni004eu5 con OpenAPI PVMS
+        {
+            "url": "https://uni004eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1/login",
+            "payload": {"userName": user_clean, "systemCode": key_clean},
+            "type": "pvms"
+        },
+        # Opzione B: Host eu5 con formato Northbound Alternativo
+        {
+            "url": "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1/login",
+            "payload": {"systemCode": user_clean, "secretKey": key_clean},
+            "type": "pvms"
+        },
+        # Opzione C: Host uni004eu5 con formato Northbound Legacy
+        {
+            "url": "https://uni004eu5.fusionsolar.huawei.com/thirdstation/v1.0/login",
+            "payload": {"userName": user_clean, "systemCode": key_clean},
+            "type": "thirdstation"
+        }
+    ]
 
-    try:
-        res = session.post(LOGIN_URL, json=payload, timeout=15)
-        print(f"[*] Risposta HTTP: {res.status_code}", flush=True)
+    success_test = None
+    last_response = None
 
-        if res.status_code == 200:
-            data = res.json()
-            print(f"[*] Risposta JSON Server: {data}", flush=True)
+    for idx, test in enumerate(tests):
+        print(f"[*] Prova Combinazione #{idx + 1}: {test['url']}...", flush=True)
+        try:
+            res = session.post(test["url"], json=test["payload"], timeout=12)
+            print(f"    └─ HTTP Status: {res.status_code}", flush=True)
+            
+            if res.status_code == 200:
+                data = res.json()
+                last_response = data
+                print(f"    └─ Risposta Server: {data}", flush=True)
 
-            fail_code = data.get("failCode")
-            code = str(data.get("code", ""))
+                fail_code = data.get("failCode")
+                code = str(data.get("code", ""))
 
-            # Verifico se il login ha avuto successo
-            if fail_code == 0 or code == "0" or data.get("success") is True:
-                # Recupero Token di Sicurezza XSRF
-                xsrf = res.headers.get("XSRF-TOKEN") or session.cookies.get("XSRF-TOKEN")
-                if xsrf:
-                    session.headers.update({"XSRF-TOKEN": xsrf})
+                if fail_code == 0 or code == "0" or data.get("success") is True:
+                    success_test = test
+                    xsrf = res.headers.get("XSRF-TOKEN") or session.cookies.get("XSRF-TOKEN")
+                    if xsrf:
+                        session.headers.update({"XSRF-TOKEN": xsrf})
+                    print("[+] LOGIN RIUSCITO!", flush=True)
+                    break
+        except Exception as e:
+            print(f"    └─ Errore di connessione: {e}", flush=True)
 
-                summary = "## ☀️ Report Diagnostico API FusionSolar\n\n"
-                summary += "### 🟢 Login Riuscito con Successo!\n\n"
+    summary = "## ☀️ Report Diagnostico API FusionSolar\n\n"
 
-                # Chiamata per recuperare gli impianti selezionati
-                print("[*] Richiesta lista impianti in corso...", flush=True)
-                st_res = session.post(STATION_LIST_URL, json={"pageNo": 1}, timeout=15)
-                st_json = st_res.json()
-                print(f"[*] Risposta Impianti: {st_json}", flush=True)
+    if success_test:
+        summary += "### 🟢 Login Riuscito con Successo!\n\n"
+        summary += f"* **Endpoint Attivo:** `{success_test['url']}`\n\n"
 
-                stations = st_json.get("data", [])
-                if isinstance(stations, dict):
-                    stations = stations.get("list", [])
-
-                summary += f"### 📊 Impianti Trovati ({len(stations)})\n\n"
-                if stations:
-                    summary += "| Nome Impianto | Codice Impianto | Capacità (kWp) |\n"
-                    summary += "| :--- | :--- | :--- |\n"
-                    for s in stations:
-                        name = s.get("stationName", "N/D")
-                        code_st = s.get("stationCode", "N/D")
-                        cap = s.get("capacity", "N/D")
-                        summary += f"| **{name}** | `{code_st}` | {cap} kWp |\n"
-                else:
-                    summary += "_Nessun impianto associato a questo utente API._\n"
-
-                # Logout pulito della sessione
-                session.post(LOGOUT_URL, timeout=5)
-                write_github_summary(summary)
-
-            else:
-                summary = "## ☀️ Report Diagnostico API FusionSolar\n\n"
-                summary += "### 🔴 Credenziali Rifiutate da Huawei\n\n"
-                summary += f"* **Codice Errore Huawei:** `{fail_code or code}`\n"
-                summary += f"* **Dettaglio:** `{data.get('message', data)}`\n\n"
-                summary += "💡 **Cosa fare:**\n"
-                summary += "1. Riapri la scheda dell'utente `Monitoragg_api` su FusionSolar.\n"
-                summary += "2. Attiva lo switch **Cambia password**, inserisci una nuova password e premi **OK**.\n"
-                summary += "3. Aggiorna il Secret `FUSIONSOLAR_API_KEY` su GitHub con la nuova password.\n"
-                write_github_summary(summary)
+        # Determinazione dell'URL per recuperare gli impianti
+        if success_test["type"] == "thirdstation":
+            host_base = success_test["url"].split("/thirdstation")[0]
+            list_url = f"{host_base}/thirdstation/v1.0/station/list"
+            logout_url = f"{host_base}/thirdstation/v1.0/logout"
         else:
-            write_github_summary(f"### 🔴 Errore HTTP {res.status_code} dal server Huawei\n")
+            host_base = success_test["url"].split("/rest")[0]
+            list_url = f"{host_base}/rest/openapi/pvms/v1/station/list"
+            logout_url = f"{host_base}/rest/openapi/pvms/v1/logout"
 
-    except Exception as e:
-        print(f"❌ Errore durante la chiamata: {e}", flush=True)
-        write_github_summary(f"### ❌ Errore Connessione: `{e}`\n")
+        try:
+            print("[*] Recupero lista impianti...", flush=True)
+            st_res = session.post(list_url, json={"pageNo": 1}, timeout=15)
+            st_json = st_res.json()
+
+            stations = st_json.get("data", [])
+            if isinstance(stations, dict):
+                stations = stations.get("list", [])
+
+            summary += f"### 📊 Impianti Trovati ({len(stations)})\n\n"
+            if stations:
+                summary += "| Nome Impianto | Codice Impianto | Capacità (kWp) |\n"
+                summary += "| :--- | :--- | :--- |\n"
+                for s in stations:
+                    name = s.get("stationName", "N/D")
+                    code_st = s.get("stationCode", "N/D")
+                    cap = s.get("capacity", "N/D")
+                    summary += f"| **{name}** | `{code_st}` | {cap} kWp |\n"
+            else:
+                summary += "_Nessun impianto associato a questo utente API._\n"
+
+            session.post(logout_url, timeout=5)
+
+        except Exception as ex:
+            summary += f"⚠️ Errore nel recupero impianti: `{ex}`\n"
+    else:
+        summary += "### 🔴 Impossibile effettuare il Login\n\n"
+        summary += f"* **Ultimo Messaggio dal Server:** `{last_response}`\n\n"
+
+    write_github_summary(summary)
 
 if __name__ == "__main__":
     main()
