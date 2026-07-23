@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+from fpdf import FPDF
 
 # Configurazione Logging
 logging.basicConfig(
@@ -9,15 +10,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# ---------------------------------------------------------------------------
-# CONFIGURAZIONE ED ENDPOINT
-# ---------------------------------------------------------------------------
 BASE_URL = "https://eu5.fusionsolar.huawei.com/thirdData"
-
-# Legge le credenziali dalle variabili d'ambiente (GitHub Secrets)
-# Se non trovate, usa i valori di fallback inseriti sotto
 API_USER = os.getenv("FUSIONSOLAR_API_USER", "Monitoragg_api")
-API_PASS = os.getenv("FUSIONSOLAR_API_KEY", "TestAPI2026")  # Imposta la tua password
+API_PASS = os.getenv("FUSIONSOLAR_API_KEY", "TestAPI2026")
 
 
 class FusionSolarAPI:
@@ -30,14 +25,8 @@ class FusionSolarAPI:
         self.xsrf_token = None
 
     def login(self) -> bool:
-        """Effettua l'autenticazione sull'endpoint /thirdData/login."""
         url = f"{self.base_url}/login"
-        payload = {
-            "userName": self.username,
-            "systemCode": self.password
-        }
-
-        logging.info(f"Connessione in corso a FusionSolar per l'utente '{self.username}'...")
+        payload = {"userName": self.username, "systemCode": self.password}
         
         try:
             response = self.session.post(url, json=payload, timeout=15)
@@ -45,115 +34,84 @@ class FusionSolarAPI:
             data = response.json()
 
             if data.get("success"):
-                # Il token risiede nell'header 'xsrf-token' o all'interno del campo 'data'
                 self.xsrf_token = response.headers.get("xsrf-token") or data.get("data")
                 self.session.headers.update({"xsrf-token": self.xsrf_token})
                 logging.info("Login effettuato con successo!")
                 return True
             else:
-                fail_code = data.get("failCode")
-                message = data.get("message")
-                logging.error(f"Login fallito [Codice {fail_code}]: {message}")
+                logging.error(f"Login fallito: {data.get('message')}")
                 return False
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Errore durante la richiesta di login: {e}")
+        except Exception as e:
+            logging.error(f"Errore connessione login: {e}")
             return False
 
     def get_station_list(self) -> list:
-        """Recupera la lista di tutti gli impianti associati all'account."""
         if not self.xsrf_token:
-            logging.error("Impossibile recuperare gli impianti: token mancante. Effettuare prima il login.")
             return []
-
+        
         url = f"{self.base_url}/getStationList"
-        logging.info("Recupero elenco impianti...")
-
         try:
             response = self.session.post(url, json={}, timeout=15)
             response.raise_for_status()
             data = response.json()
-
-            if data.get("success"):
-                stations = data.get("data", [])
-                logging.info(f"Trovati {len(stations)} impianti.")
-                return stations
-            else:
-                logging.error(f"Errore nel recupero impianti: {data.get('failCode')}")
-                return []
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Errore durante la chiamata getStationList: {e}")
+            return data.get("data", []) if data.get("success") else []
+        except Exception as e:
+            logging.error(f"Errore recupero impianti: {e}")
             return []
 
-    def get_real_time_kpi(self, station_codes: list) -> dict:
-        """
-        Recupera i dati in tempo reale per una lista di stationCodes (max 100 per chiamata).
-        
-        :param station_codes: Lista di stringhe con i codici impianti (es. ["NE=182980048"])
-        """
-        if not self.xsrf_token:
-            return {}
 
-        url = f"{self.base_url}/getStationRealKpi"
-        payload = {
-            "stationCodes": ",".join(station_codes)
-        }
+class PDFReport(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 14)
+        self.cell(0, 10, "Report Impianti FusionSolar", ln=True, align="C")
+        self.ln(5)
 
-        try:
-            response = self.session.post(url, json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get("success"):
-                return data.get("data", [])
-            else:
-                logging.error(f"Errore recupero KPI: {data.get('failCode')}")
-                return {}
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Errore richiesta KPI real-time: {e}")
-            return {}
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Pagina {self.page_no()}", align="C")
 
 
-# ---------------------------------------------------------------------------
-# MAIN EXECUTION
-# ---------------------------------------------------------------------------
+def genera_pdf_impianti(stations, filename="report_impianti.pdf"):
+    pdf = PDFReport()
+    pdf.add_page()
+    pdf.set_font("Arial", size=10)
+
+    # Intestazione Tabella
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(80, 8, "Nome Impianto", border=1)
+    pdf.cell(50, 8, "Codice Impianto", border=1)
+    pdf.cell(60, 8, "Capacità (kWp)", border=1, ln=True)
+
+    pdf.set_font("Arial", size=9)
+    
+    # Contenuto Tabella
+    for st in stations:
+        nome = str(st.get("stationName", "N/D"))[:35]  # Tronca nomi troppo lunghi
+        codice = str(st.get("stationCode", "N/D"))
+        capacita = str(round(float(st.get("capacity", 0)), 2))
+
+        pdf.cell(80, 7, nome, border=1)
+        pdf.cell(50, 7, codice, border=1)
+        pdf.cell(60, 7, capacita, border=1, ln=True)
+
+    pdf.output(filename)
+    logging.info(f"PDF generato con successo: '{filename}'")
+
+
 def main():
-    api = FusionSolarAPI(
-        base_url=BASE_URL,
-        username=API_USER,
-        password=API_PASS
-    )
+    api = FusionSolarAPI(BASE_URL, API_USER, API_PASS)
 
-    # 1. Login
     if not api.login():
-        logging.error("Procedura interrotta a causa del fallimento del login.")
         return
 
-    # 2. Ottieni la lista degli impianti
     stations = api.get_station_list()
-    
     if not stations:
-        logging.warning("Nessun impianto trovato o errore nella chiamata.")
+        logging.warning("Nessun impianto trovato.")
         return
 
-    # 3. Salva la lista impianti su un file JSON locale
-    output_file = "impianti_fusionsolar.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(stations, f, indent=4, ensure_ascii=False)
-    
-    logging.info(f"Elenco impianti salvato con successo in '{output_file}'.")
-
-    # 4. Esempio: Estrarre i dati in tempo reale per i primi 10 impianti
-    station_codes = [s["stationCode"] for s in stations[:10] if "stationCode" in s]
-    if station_codes:
-        logging.info(f"Richiesta dati Real-Time KPI per {len(station_codes)} impianti...")
-        realtime_data = api.get_real_time_kpi(station_codes)
-        
-        # Stampa a video o salva i dati
-        print("\n--- DATI IN TEMPO REALE (Esempio primi impianti) ---")
-        print(json.dumps(realtime_data, indent=2, ensure_ascii=False))
+    # Genera il report PDF
+    genera_pdf_impianti(stations, "report_impianti.pdf")
 
 
 if __name__ == "__main__":
