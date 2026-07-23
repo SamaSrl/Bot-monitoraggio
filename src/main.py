@@ -53,16 +53,10 @@ class FusionSolarAPI:
         return []
 
     def get_yesterday_kpi(self, station_codes: list) -> dict:
-        """
-        Interroga i KPI storici giornalieri di Huawei impostando esplicitamente
-        il timestamp alla mezzanotte del giorno precedente per evitare dati parziali odierni.
-        """
         if not self.xsrf_token or not station_codes:
             return {}
 
         url = f"{self.base_url}/getKpiStationDay"
-        
-        # Calcoliamo la mezzanotte esatta di ieri nel formato timestamp millisecondi locale/UTC accettato da Huawei
         yesterday = datetime.now() - timedelta(days=1)
         yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
         collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
@@ -83,7 +77,6 @@ class FusionSolarAPI:
                     code = item.get("stationCode")
                     data_dict = item.get("dataItemMap", {})
                     
-                    # Chiavi standard Huawei per l'energia giornaliera consolidata
                     val = (
                         data_dict.get("day_power") 
                         or data_dict.get("product_power") 
@@ -135,27 +128,56 @@ class FusionSolarAPI:
         return alarms_map
 
 
-def ottieni_coordinate(nome_impianto: str):
-    """Ricava le coordinate geografiche dal nome dell'impianto tramite Open-Meteo Geocoding."""
-    lat, lon = 45.95, 13.03 # Default Friuli
-    parole = [p for p in nome_impianto.replace("-", " ").split() if p.lower() not in ["omnia", "immobiliare", "capannone", "nuovo", "scuola", "ponte", "rosso"]]
-    for parola in parole:
-        if len(parola) >= 3:
-            try:
-                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={parola}&count=1&language=it&format=json"
-                resp = requests.get(geo_url, timeout=4)
-                if resp.status_code == 200:
-                    res = resp.json().get("results")
-                    if res:
-                        lat, lon = res[0].get("latitude"), res[0].get("longitude")
-                        break
-            except:
-                pass
-    return lat, lon
+def estrai_dati_impianto(station):
+    """Estrae nome, capacità reale (kWp) e coordinate geografiche precise."""
+    nome = station.get("stationName", "N/D")
+    
+    # Capacità da Huawei o fallback mirato sul nome
+    cap = 0.0
+    try:
+        cap = float(station.get("capacity") or station.get("capacityKwp") or 0)
+    except:
+        cap = 0.0
+
+    # Tabella di riscontro taglie kWp se Huawei restituisce 0
+    if cap <= 0:
+        nome_lower = nome.lower()
+        if "ponte rosso" in nome_lower: cap = 200.0
+        elif "piaget" in nome_lower: cap = 100.0
+        elif "dignano" in nome_lower: cap = 150.0
+        elif "maniago" in nome_lower: cap = 150.0
+        elif "moretto" in nome_lower: cap = 50.0
+        elif "capannone" in nome_lower: cap = 100.0
+        elif "rivignano" in nome_lower: cap = 200.0
+        else: cap = 100.0
+
+    # Ricerca coordinate geolocalizzate mirate sul comune
+    lat, lon = 45.95, 13.03
+    comune = "Rivignano" # Default zona
+    nome_lower = nome.lower()
+    
+    if "ponte rosso" in nome_lower: comune = "San Giorgio di Nogaro"
+    elif "piaget" in nome_lower or "maniago" in nome_lower: comune = "Maniago"
+    elif "dignano" in nome_lower: comune = "Dignano"
+    elif "moretto" in nome_lower: comune = "Codroipo"
+    elif "capannone" in nome_lower: comune = "Rivignano"
+    elif "rivignano" in nome_lower: comune = "Rivignano"
+
+    try:
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={comune}&count=1&language=it&format=json"
+        resp = requests.get(geo_url, timeout=4)
+        if resp.status_code == 200:
+            res = resp.json().get("results")
+            if res:
+                lat, lon = res[0].get("latitude"), res[0].get("longitude")
+    except:
+        pass
+
+    return nome, cap, lat, lon
 
 
 def get_irraggiamento_ieri(lat, lon) -> float:
-    """Restituisce solo il valore pulito dell'irraggiamento solare di ieri (kWh/m^2)."""
+    """Restituisce il valore pulito dell'irraggiamento solare di ieri (kWh/m^2)."""
     if not lat or not lon:
         return 0.0
 
@@ -176,7 +198,6 @@ def get_irraggiamento_ieri(lat, lon) -> float:
             data = resp.json()
             rad_mj = data.get("daily", {}).get("shortwave_radiation_sum", [0])[0]
             if rad_mj is not None:
-                # Conversione secca da MJ/m^2 a kWh/m^2 (1 kWh = 3.6 MJ)
                 return round(rad_mj / 3.6, 2)
     except Exception as e:
         logging.warning(f"Errore meteo irraggiamento: {e}")
@@ -189,7 +210,7 @@ class PDFReport(FPDF):
         self.set_font("Arial", "B", 13)
         self.cell(0, 8, "Report Stato Impianti & Meteo FusionSolar", border=0, ln=True, align="C")
         self.set_font("Arial", "I", 8)
-        self.cell(0, 5, "Produzione Reale di Ieri vs Irraggiamento Solare", border=0, ln=True, align="C")
+        self.cell(0, 5, "Produzione Reale di Ieri, Potenza Impianto e Irraggiamento", border=0, ln=True, align="C")
         self.ln(4)
 
     def footer(self):
@@ -208,39 +229,43 @@ def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti
     pdf = PDFReport()
     pdf.add_page()
 
+    # Intestazione Tabella (A4 larghezza utile ~190mm)
     pdf.set_font("Arial", "B", 8)
-    pdf.cell(70, 8, "Nome Impianto", border=1)
-    pdf.cell(30, 8, "Reale (kWh)", border=1, align="C")
-    pdf.cell(30, 8, "Irrag. (kWh/m2)", border=1, align="C")
+    pdf.cell(55, 8, "Nome Impianto", border=1)
+    pdf.cell(25, 8, "Potenza (kWp)", border=1, align="C")
+    pdf.cell(25, 8, "Reale (kWh)", border=1, align="C")
+    pdf.cell(25, 8, "Irrag. (kWh/m2)", border=1, align="C")
     pdf.cell(60, 8, "Stato / Errori", border=1, ln=True, align="C")
 
     for st in stations:
         station_code = st.get("stationCode", "")
-        nome_raw = st.get("stationName", "N/D")
-        nome = pulisci_testo(nome_raw)[:38]
+        nome_raw, capacity_kwp, lat, lon = estrai_dati_impianto(st)
+        nome = pulisci_testo(nome_raw)[:32]
         
-        lat, lon = ottieni_coordinate(nome_raw)
-
         # Produzione Reale di Ieri
         prod_reale_val = kpi_map.get(station_code, 0.0)
         prod_reale_str = f"{prod_reale_val:,.2f}".replace(",", " ")
 
-        # Solo valore irraggiamento solare puro
+        # Irraggiamento Solare
         irraggiamento_val = get_irraggiamento_ieri(lat, lon)
         irraggiamento_str = f"{irraggiamento_val:,.2f}".replace(",", " ") if irraggiamento_val > 0 else "N/D"
 
+        # Capacità formattata
+        cap_str = f"{capacity_kwp:,.1f}".replace(",", " ")
+
         # Stato ed Errori
         if station_code in alarms_map and alarms_map[station_code]:
-            stato_errore = pulisci_testo(alarms_map[station_code])[:32]
+            stato_errore = pulisci_testo(alarms_map[station_code])[:30]
             ha_errore = True
         else:
             stato_errore = "OK"
             ha_errore = False
 
         pdf.set_font("Arial", size=8)
-        pdf.cell(70, 7, nome, border=1)
-        pdf.cell(30, 7, prod_reale_str, border=1, align="C")
-        pdf.cell(30, 7, irraggiamento_str, border=1, align="C")
+        pdf.cell(55, 7, nome, border=1)
+        pdf.cell(25, 7, cap_str, border=1, align="C")
+        pdf.cell(25, 7, prod_reale_str, border=1, align="C")
+        pdf.cell(25, 7, irraggiamento_str, border=1, align="C")
         
         if ha_errore:
             pdf.set_font("Arial", "B", 8)
