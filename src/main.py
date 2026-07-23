@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+from datetime import datetime, timedelta
 from fpdf import FPDF
 
 # Configurazione Logging
@@ -13,7 +14,7 @@ logging.basicConfig(
 # Endpoint FusionSolar Northbound API
 BASE_URL = "https://eu5.fusionsolar.huawei.com/thirdData"
 
-# Recupero credenziali dalle variabili d'ambiente (GitHub Secrets o locale)
+# Credenziali dalle variabili d'ambiente (GitHub Secrets o valore locale di fallback)
 API_USER = os.getenv("FUSIONSOLAR_API_USER", "Monitoragg_api")
 API_PASS = os.getenv("FUSIONSOLAR_API_KEY", "TestAPI2026")
 
@@ -81,11 +82,63 @@ class FusionSolarAPI:
             logging.error(f"Errore durante la chiamata getStationList: {e}")
             return []
 
+    def get_active_alarms(self, station_codes: list) -> dict:
+        """
+        Recupera gli allarmi attivi/non gestiti per la lista di impianti fornita.
+        Ritorna un dizionario: { stationCode: "Nome Errore / Descrizione" }
+        """
+        if not self.xsrf_token or not station_codes:
+            return {}
+
+        url = f"{self.base_url}/getAlarmList"
+        
+        # Intervallo temporale per gli allarmi recenti (ultimi 3 giorni fino a ora)
+        now = datetime.now()
+        begin_time = int((now - timedelta(days=3)).timestamp() * 1000)
+        end_time = int(now.timestamp() * 1000)
+
+        # Huawei supporta l'invio di stationCodes separati da virgola (max 100 per volta)
+        payload = {
+            "stationCodes": ",".join(station_codes),
+            "beginTime": begin_time,
+            "endTime": end_time,
+            "status": 1  # 1 indica allarmi attivi / non rientrati
+        }
+
+        alarms_map = {}
+
+        try:
+            response = self.session.post(url, json=payload, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("success"):
+                alarm_list = data.get("data", [])
+                logging.info(f"Trovati {len(alarm_list)} allarmi attivi.")
+                
+                for alarm in alarm_list:
+                    code = alarm.get("stationCode")
+                    alarm_name = alarm.get("alarmName") or alarm.get("alarmNameEn") or "Errore Rilevato"
+                    
+                    if code:
+                        # Se l'impianto ha già un errore registrato, li concateniamo
+                        if code in alarms_map:
+                            alarms_map[code] += f", {alarm_name}"
+                        else:
+                            alarms_map[code] = alarm_name
+            else:
+                logging.warning(f"Chiamata allarmi completata con esito: {data.get('failCode')}")
+
+        except Exception as e:
+            logging.error(f"Errore nel recupero degli allarmi: {e}")
+
+        return alarms_map
+
 
 class PDFReport(FPDF):
     def header(self):
         self.set_font("Arial", "B", 14)
-        self.cell(0, 10, "Report Impianti FusionSolar", border=0, ln=True, align="C")
+        self.cell(0, 10, "Report Stato Impianti FusionSolar", border=0, ln=True, align="C")
         self.set_font("Arial", "I", 9)
         self.cell(0, 5, "Estrazione automatica via OpenAPI Northbound", border=0, ln=True, align="C")
         self.ln(5)
@@ -96,28 +149,53 @@ class PDFReport(FPDF):
         self.cell(0, 10, f"Pagina {self.page_no()}", align="C")
 
 
-def genera_pdf_impianti(stations, filename="report_impianti.pdf"):
-    """Genera e formatta il report PDF con la lista degli impianti."""
+def pulisci_testo(testo: str) -> str:
+    """Rimuove caratteri speciali non supportati dal font Latin-1 di FPDF."""
+    if not testo:
+        return ""
+    return str(testo).encode('latin-1', 'replace').decode('latin-1')
+
+
+def genera_pdf_impianti(stations, alarms_map, filename="report_impianti.pdf"):
+    """Genera e formatta il report PDF con la lista degli impianti e la colonna Errori."""
     pdf = PDFReport()
     pdf.add_page()
 
-    # Intestazione Tabella
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(90, 8, "Nome Impianto", border=1)
-    pdf.cell(55, 8, "Codice Stazione", border=1)
-    pdf.cell(45, 8, "Capacita' (kWp)", border=1, ln=True)
+    # Intestazione Tabella (Totale larghezza utile ~190 mm su A4)
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(65, 8, "Nome Impianto", border=1)
+    pdf.cell(45, 8, "Codice Stazione", border=1)
+    pdf.cell(25, 8, "kWp", border=1, align="C")
+    pdf.cell(55, 8, "Stato / Errori", border=1, ln=True, align="C")
 
     # Contenuto Tabella
-    pdf.set_font("Arial", size=8)
     for st in stations:
-        # Pulisce e tronca il nome per non sforare la cella
-        nome = str(st.get("stationName", "N/D")).encode('latin-1', 'replace').decode('latin-1')[:45]
-        codice = str(st.get("stationCode", "N/D"))
+        station_code = st.get("stationCode", "")
+        nome = pulisci_testo(st.get("stationName", "N/D"))[:32]
+        codice = pulisci_testo(station_code)
         capacita = str(round(float(st.get("capacity", 0)), 2))
+        
+        # Determina lo stato dell'errore
+        if station_code in alarms_map and alarms_map[station_code]:
+            stato_errore = pulisci_testo(alarms_map[station_code])[:30]
+            ha_errore = True
+        else:
+            stato_errore = "OK"
+            ha_errore = False
 
-        pdf.cell(90, 6, nome, border=1)
-        pdf.cell(55, 6, codice, border=1)
-        pdf.cell(45, 6, capacita, border=1, ln=True)
+        # Stampa riga
+        pdf.set_font("Arial", size=8)
+        pdf.cell(65, 6, nome, border=1)
+        pdf.cell(45, 6, codice, border=1)
+        pdf.cell(25, 6, capacita, border=1, align="C")
+        
+        # Se c'è un errore evidenziamo il testo in grassetto
+        if ha_errore:
+            pdf.set_font("Arial", "B", 8)
+            pdf.cell(55, 6, stato_errore, border=1, ln=True)
+        else:
+            pdf.set_font("Arial", size=8)
+            pdf.cell(55, 6, stato_errore, border=1, ln=True, align="C")
 
     pdf.output(filename)
     logging.info(f"PDF generato con successo: '{filename}'")
@@ -132,7 +210,7 @@ def main():
 
     # 1. Login
     if not api.login():
-        logging.error("Procedura interrotta.")
+        logging.error("Procedura interrotta: login fallito.")
         return
 
     # 2. Ottieni la lista impianti
@@ -141,8 +219,19 @@ def main():
         logging.warning("Nessun impianto trovato.")
         return
 
-    # 3. Genera il report PDF
-    genera_pdf_impianti(stations, "report_impianti.pdf")
+    # 3. Recupera allarmi per gli impianti (invio a blocchi di max 50 impianti per stabilità)
+    all_station_codes = [s["stationCode"] for s in stations if "stationCode" in s]
+    alarms_map = {}
+    
+    chunk_size = 50
+    for i in range(0, len(all_station_codes), chunk_size):
+        chunk = all_station_codes[i:i + chunk_size]
+        logging.info(f"Verifica allarmi per il blocco di impianti {i+1}-{i+len(chunk)}...")
+        chunk_alarms = api.get_active_alarms(chunk)
+        alarms_map.update(chunk_alarms)
+
+    # 4. Genera il report PDF
+    genera_pdf_impianti(stations, alarms_map, "report_impianti.pdf")
 
 
 if __name__ == "__main__":
