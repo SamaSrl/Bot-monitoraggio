@@ -1,6 +1,6 @@
 Ecco il file .github/workflows/main.yml completo, aggiornato per utilizzare il nuovo script basato su API senza browser/Playwright.
 
-.github/workflows/main.yml
+.github/workflows/monitor.yml
 YAML
 name: Bot Monitoraggio FusionSolar
 
