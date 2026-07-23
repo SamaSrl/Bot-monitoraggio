@@ -1,13 +1,9 @@
-Ecco il file .github/workflows/main.yml completo, aggiornato per utilizzare il nuovo script basato su API senza browser/Playwright.
-
-.github/workflows/monitor.yml
-YAML
 name: Bot Monitoraggio FusionSolar
 
 on:
-  workflow_dispatch: # Ti permette di avviare il bot manualmente dalla scheda Actions
+  workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *' # (Opzionale) Esegue il bot automaticamente ogni giorno alle 08:00 UTC
+    - cron: '0 8 * * *'
 
 jobs:
   run-bot:
