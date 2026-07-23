@@ -9,7 +9,7 @@ API_KEY = os.environ.get("FUSIONSOLAR_API_KEY")
 API_HOSTS = [
     "https://intl.fusionsolar.huawei.com/thirdstation/v1.0",
     "https://eu5.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://region003.fusionsolar.huawei.com/thirdstation/v1.0"
+    "https://region004.fusionsolar.huawei.com/thirdstation/v1.0"
 ]
 
 def write_github_summary(content):
