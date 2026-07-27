@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import datetime
+import time
 from zoneinfo import ZoneInfo
 
 # ==========================================
@@ -35,49 +36,59 @@ if not API_PASS:
     st.error("⚠️ Password non trovata nei Secrets di Streamlit!")
 
 # ==========================================
-# 3. FUNZIONI API HUAWEISOLAR (PVMS v1)
+# 3. FUNZIONI API HUAWEISOLAR CON CACHE
 # ==========================================
 HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
-def get_huawei_data(username, password):
+@st.cache_data(ttl=500, show_spinner=False)
+def get_huawei_token_cached(username, password):
     """
-    Esegue Login, Lista Stazioni e KPI in un'unica sessione
-    per evitare l'errore USER_MUST_RELOGIN.
+    Effettua il login e salva il token in CACHE per ~8 minuti (480s).
+    Questo EVITA l'errore 'Interface access frequency:5.0/10minute'.
     """
-    session = requests.Session()
+    url = f"{HUAWEI_BASE_URL}/login"
+    payload = {"username": username, "password": password}
     headers = {"Content-Type": "application/json"}
     
-    # 1. Login
-    login_url = f"{HUAWEI_BASE_URL}/login"
-    login_payload = {"username": username, "password": password}
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("success"):
+                token = res.headers.get("X-SRT") or res.headers.get("xsrt")
+                return token, None
+            elif data.get("failCode") in [407, 20002] or "frequency" in str(data.get("message")):
+                return None, "⏳ **Limite login raggiunto (5 login in 10 min)**. Huawei ha temporaneamente bloccato i login. Attendi qualche minuto prima di riprovare."
+            else:
+                return None, f"Errore Login Huawei: {data.get('message')}"
+        return None, f"Errore Server HTTP: {res.status_code}"
+    except Exception as e:
+        return None, f"Errore Connessione: {e}"
+
+def fetch_huawei_data_with_token(token):
+    """
+    Recupera Stazioni e KPI usando il token già memorizzato.
+    """
+    headers = {"X-SRT": token, "Content-Type": "application/json"}
     
     try:
-        res_login = session.post(login_url, json=login_payload, headers=headers, timeout=12)
-        if res_login.status_code != 200 or not res_login.json().get("success"):
-            err_msg = res_login.json().get("message", "Errore Login")
-            return None, f"Login fallito: {err_msg}"
-        
-        # Estrazione Token X-SRT
-        token = res_login.headers.get("X-SRT") or res_login.headers.get("xsrt")
-        session.headers.update({"X-SRT": token, "Content-Type": "application/json"})
-        
-        # 2. Download Lista Stazioni
+        # 1. Download Lista Stazioni
         list_url = f"{HUAWEI_BASE_URL}/getStationList"
-        res_list = session.post(list_url, json={}, timeout=12)
+        res_list = requests.post(list_url, json={}, headers=headers, timeout=12)
         data_list = res_list.json()
         
         if not data_list.get("success") or not data_list.get("data"):
-            return None, f"Errore recupero stazioni: {data_list.get('message')}"
+            return None, f"Errore lista stazioni: {data_list.get('message')}"
         
         stations = data_list.get("data", [])
         
-        # 3. Download KPI reali per tutte le stazioni trovate
+        # 2. Download KPI reali
         station_codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
         kpi_map_result = {}
         
         if station_codes:
             kpi_url = f"{HUAWEI_BASE_URL}/getStationRealKpi"
-            res_kpi = session.post(kpi_url, json={"stationCodes": ",".join(station_codes)}, timeout=12)
+            res_kpi = requests.post(kpi_url, json={"stationCodes": ",".join(station_codes)}, headers=headers, timeout=12)
             kpi_data = res_kpi.json()
             if kpi_data.get("success") and kpi_data.get("data"):
                 for item in kpi_data.get("data", []):
@@ -86,7 +97,7 @@ def get_huawei_data(username, password):
         return {"stations": stations, "kpi_map": kpi_map_result}, None
 
     except Exception as e:
-        return None, f"Errore di connessione API: {e}"
+        return None, f"Errore download dati: {e}"
 
 # ==========================================
 # 4. CALCOLO PRODUZIONE ATTESA (OPEN-METEO)
@@ -96,7 +107,6 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
     current_hour = now_italy.hour
     current_minute = now_italy.minute
 
-    # Conversione Azimuth per Open-Meteo (0° = SUD, -90° = EST, 90° = OVEST)
     azimuth_api = azimuth_user
     if azimuth_api > 180:
         azimuth_api -= 360
@@ -118,12 +128,10 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
             hourly_tilted = data.get("hourly", {}).get("global_tilted_irradiance", [])
 
             if hourly_tilted:
-                # Ore intere trascorse fino alle ore precedenti
                 for h in range(min(current_hour, len(hourly_tilted))):
                     if hourly_tilted[h] is not None:
                         cumulative_poa_wh += float(hourly_tilted[h])
 
-                # Minuti trascorsi dell'ora corrente
                 if current_hour < len(hourly_tilted) and hourly_tilted[current_hour] is not None:
                     current_instant_w = float(hourly_tilted[current_hour])
                     cumulative_poa_wh += current_instant_w * (current_minute / 60.0)
@@ -158,16 +166,22 @@ if btn_fetch:
     if not API_PASS:
         st.error("Inserisci la password nei Secrets per procedere.")
     else:
-        with st.spinner("Autenticazione e recupero dati da Huawei in corso..."):
-            huawei_data, err = get_huawei_data(API_USER, API_PASS)
+        with st.spinner("Autenticazione in corso (Token con Cache)..."):
+            token, err_login = get_huawei_token_cached(API_USER, API_PASS)
 
-        if err:
-            st.error(err)
+        if err_login:
+            st.warning(err_login)
         else:
-            st.session_state["huawei_raw"] = huawei_data
-            st.success("✅ Dati recuperati con successo da Huawei!")
+            with st.spinner("Recupero dati impianti da Huawei..."):
+                huawei_data, err_data = fetch_huawei_data_with_token(token)
 
-# Se i dati sono stati recuperati, mostriamo le tabelle
+            if err_data:
+                st.error(err_data)
+            else:
+                st.session_state["huawei_raw"] = huawei_data
+                st.success("✅ Dati recuperati con successo da Huawei!")
+
+# Se i dati sono in sessione, mostriamo la tabella
 if "huawei_raw" in st.session_state:
     huawei_raw = st.session_state["huawei_raw"]
     stations = huawei_raw["stations"]
@@ -176,18 +190,15 @@ if "huawei_raw" in st.session_state:
     now_str = datetime.datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y - %H:%M:%S")
     st.caption(f"🕒 Ultimo aggiornamento: **{now_str}** | Trovati **{len(stations)}** impianti reali.")
 
-    # Inizializziamo il dizionario di configurazione se non esiste
     if "plant_configs" not in st.session_state:
         st.session_state["plant_configs"] = {}
 
-    # Costruiamo il dataframe per consentire l'editing di Tilt e Azimuth
     config_rows = []
     for s in stations:
         code = s.get("stationCode")
         name = s.get("stationName")
         kwp = float(s.get("capacity", 0.0))
         
-        # Recupera valore salvato oppure imposta il default (Tilt=15°, Azimuth=0°)
         cfg = st.session_state["plant_configs"].get(code, {"Tilt": 15, "Azimuth": 0})
         
         config_rows.append({
@@ -201,9 +212,8 @@ if "huawei_raw" in st.session_state:
     df_config_input = pd.DataFrame(config_rows)
 
     st.markdown("### 🛠️ Personalizza Inclinazione (Tilt) e Orientamento (Azimuth)")
-    st.info("💡 Puoi modificare i valori di **Tilt** e **Azimuth** per ciascun impianto direttamente nella tabella qui sotto:")
+    st.info("💡 Modifica i valori di **Tilt** e **Azimuth** per ciascun impianto direttamente nella tabella:")
 
-    # TABELLA EDITABILE PER TILT E AZIMUTH
     edited_df = st.data_editor(
         df_config_input,
         column_config={
@@ -217,14 +227,12 @@ if "huawei_raw" in st.session_state:
         use_container_width=True
     )
 
-    # Salviamo le modifiche inserite dall'utente
     for _, row in edited_df.iterrows():
         st.session_state["plant_configs"][row["Codice"]] = {
             "Tilt": int(row["Tilt (°)"]),
             "Azimuth": int(row["Azimuth (°)"])
         }
 
-    # ELABORAZIONE RISULTATI FINALI
     results = []
     for s in stations:
         code = s.get("stationCode")
@@ -233,17 +241,14 @@ if "huawei_raw" in st.session_state:
         lat = float(s.get("latitude")) if s.get("latitude") else 46.06
         lon = float(s.get("longitude")) if s.get("longitude") else 13.23
 
-        # Legge la configurazione personalizzata dell'impianto
         p_cfg = st.session_state["plant_configs"][code]
         tilt = p_cfg["Tilt"]
         azimuth = p_cfg["Azimuth"]
 
-        # KPI Reali Huawei
         plant_kpi = kpi_map.get(code, {})
         real_kwh = float(plant_kpi.get("day_power", 0.0))
         active_kw = float(plant_kpi.get("active_power", 0.0))
 
-        # Calcolo Meteo Atteso specifico per l'impianto
         meteo = get_expected_production_now(
             lat=lat,
             lon=lon,
@@ -288,11 +293,11 @@ if "huawei_raw" in st.session_state:
     # --- TABELLA DETTAGLIATA ---
     def color_performance(val):
         if val >= 95.0:
-            color = '#d4edda' # Verde
+            color = '#d4edda'
         elif val >= 80.0:
-            color = '#fff3cd' # Giallo
+            color = '#fff3cd'
         else:
-            color = '#f8d7da' # Rosso
+            color = '#f8d7da'
         return f'background-color: {color}'
 
     styled_df = df_res.style.map(color_performance, subset=['Performance (%)'])\
