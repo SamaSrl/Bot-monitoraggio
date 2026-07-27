@@ -19,7 +19,8 @@ API_PASS = (
     or st.secrets.get("FUSIONSOLAR_PASSWORD", "")
 )
 
-HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
+# Base URL per EU5
+BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_huawei_stations(username, password):
@@ -27,7 +28,7 @@ def get_huawei_stations(username, password):
     session.headers.update({"Content-Type": "application/json"})
 
     # 1. LOGIN
-    login_url = f"{HUAWEI_BASE_URL}/login"
+    login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
     login_payload = {"username": username, "password": password}
 
     try:
@@ -35,29 +36,38 @@ def get_huawei_stations(username, password):
         if res_login.status_code != 200:
             return None, f"Errore HTTP Login: {res_login.status_code}", None
 
-        # Estrazione del token dagli header/cookie
+        # Estrazione token
         headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-        token = (
-            headers_lower.get("xsrf-token")
-            or session.cookies.get("XSRF-TOKEN")
-        )
+        token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
 
         if not token:
             return None, "Impossibile estrarre il token dalla risposta di Login.", None
 
-        # Passiamo l'accessSession e gli header correlati
+        # Header sessione per Huawei APIG
         session.headers.update({
             "accessSession": token,
             "xsrf-token": token,
             "X-SRT": token
         })
 
-        # 2. RECUPERO LISTA STAZIONI (Con paginazione obbligatoria)
-        # L'API OpenAPI richiede pageNo
-        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={"pageNo": 1}, timeout=12)
+        # 2. PROVA ENDPOINT 1 (Standard OpenAPI PVMS)
+        endpoint_1 = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
+        res_list = session.post(endpoint_1, json={"pageNo": 1}, timeout=12)
         data_list = res_list.json()
 
-        # Estrazione stazioni o dati
+        # Se dà errore APIG.0101 (API non esistente), proviamo l'ENDPOINT 2 (Thirdparty API)
+        if data_list.get("error_code") == "APIG.0101":
+            endpoint_2 = f"{BASE_DOMAIN}/thirdparty/station/list"
+            res_list = session.post(endpoint_2, json={"pageNo": 1, "pageSize": 100}, timeout=12)
+            data_list = res_list.json()
+
+        # Se dà ancora APIG.0101, proviamo l'ENDPOINT 3 (OpenAPI v1 generico)
+        if data_list.get("error_code") == "APIG.0101":
+            endpoint_3 = f"{BASE_DOMAIN}/rest/openapi/pv/v1/station/list"
+            res_list = session.post(endpoint_3, json={"pageNo": 1}, timeout=12)
+            data_list = res_list.json()
+
+        # Estrazione stazioni
         stations = []
         if isinstance(data_list.get("data"), list):
             stations = data_list.get("data")
@@ -65,8 +75,8 @@ def get_huawei_stations(username, password):
             stations = data_list.get("data", {}).get("list", [])
 
         if not data_list.get("success") and not stations:
-            msg = data_list.get("message") or "Risposta senza campo success"
-            code = data_list.get("failCode", "N/D")
+            msg = data_list.get("message") or data_list.get("error_msg") or "Risposta senza campo success"
+            code = data_list.get("failCode") or data_list.get("error_code") or "N/D"
             return None, f"Errore API Stazioni: {msg} (Code: {code})", data_list
 
         return stations, None, data_list
@@ -80,7 +90,7 @@ if API_PASS:
     if st.button("🔄 Connetti e Carica Impianti", type="primary"):
         st.cache_data.clear()
 
-    with st.spinner("Autenticazione e recupero impianti in corso..."):
+    with st.spinner("Autenticazione e ricerca percorsi API in corso..."):
         stations, err, raw_json = get_huawei_stations(API_USER, API_PASS)
 
     if err:
