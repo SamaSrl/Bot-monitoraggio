@@ -10,10 +10,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- SIDEBAR: CREDENZIALI API FUSIONSOLAR ---
-st.sidebar.header("🔑 Credenziali API FusionSolar")
-fs_userName = st.sidebar.text_input("Username API", value="")
-fs_systemCode = st.sidebar.text_input("System Code / Password API", type="password", value="")
+# --- RECUPERO CREDENZIALI DA STREAMLIT / GITHUB SECRETS ---
+def get_secret_credentials():
+    """Estrae username e password dai Secrets configurati su Streamlit Cloud / GitHub."""
+    username = st.secrets.get("FUSIONSOLAR_USERNAME", None) or st.secrets.get("USERNAME", None)
+    password = st.secrets.get("FUSIONSOLAR_PASSWORD", None) or st.secrets.get("PASSWORD", None) or st.secrets.get("SYSTEM_CODE", None)
+    return username, password
 
 # --- API FUSIONSOLAR: AUTENTICAZIONE E RETRIEVAL DATI ---
 def get_fusionsolar_token(username, system_code):
@@ -30,7 +32,6 @@ def get_fusionsolar_token(username, system_code):
         if res.status_code == 200:
             data = res.json()
             if data.get("success"):
-                # Huawei restituisce il token nell'header 'X-SRT' o nel body
                 return res.headers.get("X-SRT") or data.get("data")
     except Exception:
         pass
@@ -52,7 +53,6 @@ def get_fusionsolar_real_kpi(station_code, token):
         if res.status_code == 200:
             data = res.json()
             if data.get("success") and data.get("data"):
-                # Estrae day_power (espresso in kWh o MWh a seconda della versione dell'API)
                 kpi_list = data.get("data", [])
                 for kpi in kpi_list:
                     if kpi.get("stationCode") == station_code:
@@ -65,10 +65,6 @@ def get_fusionsolar_real_kpi(station_code, token):
 
 # --- OPEN-METEO: IRRAGGIAMENTO CORRETTO PER FUSO ORARIO ---
 def get_poa_irradiance_data(lat, lon, tilt, azimuth_user, current_time):
-    """
-    Recupera l'irraggiamento sul piano dei moduli tenendo conto della timezone locale
-    per evitare lo sfasamento tra ore solari e ore locali.
-    """
     azimuth_api = azimuth_user
     if azimuth_api > 180:
         azimuth_api -= 360
@@ -91,7 +87,6 @@ def get_poa_irradiance_data(lat, lon, tilt, azimuth_user, current_time):
             data = res.json()
             hourly_tilted = data.get("hourly", {}).get("global_tilted_irradiance", [0]*24)
 
-            # Somma dell'energia oraria accumulata fino all'ora solare/locale corrente
             for h in range(current_hour):
                 cumulative_poa += float(hourly_tilted[h]) if h < len(hourly_tilted) else 0.0
 
@@ -105,11 +100,19 @@ def get_poa_irradiance_data(lat, lon, tilt, azimuth_user, current_time):
 
 # --- INTERFACCIA UTENTE ---
 
-st.markdown("# ☀️ Gestione Impianti & Report FusionSolar")
+col_title, col_sync = st.columns([3, 1])
+with col_title:
+    st.markdown("# ☀️ Gestione Impianti & Report FusionSolar")
+
+with col_sync:
+    if st.button("🔄 Sincronizza Nuovi Impianti", use_container_width=True):
+        st.info("Sincronizzazione avviata...")
+
 st.markdown("---")
 
 # 1. TABELLA PARAMETRI IMPIANTI
 st.markdown("## 📋 Tabella Parametri Impianti")
+st.markdown("Convenzione Azimut: **0° = SUD** | **180° = NORD** | **-90° / 270° = EST** | **90° = OVEST**")
 
 data = {
     'stationCode': ['NE=145335207', 'NE=187970646', 'NE=289231586', 'NE=231216926', 'NE=142360791', 'NE=167849112', 'NE=236021376'],
@@ -135,10 +138,15 @@ st.markdown("---")
 st.markdown("## 📊 Performance Produzione Odierna (Attesa vs Reale API)")
 
 if st.button("📈 Calcola Performance Odierna", type="secondary"):
-    # Verifica autenticazione Huawei
-    token = get_fusionsolar_token(fs_userName, fs_systemCode)
-    if not token and (fs_userName or fs_systemCode):
-        st.warning("⚠️ Impossibile autenticarsi su FusionSolar API. Verificare le credenziali nella barra laterale.")
+    fs_user, fs_pass = get_secret_credentials()
+    
+    if not fs_user or not fs_pass:
+        st.error("⚠️ Credenziali FusionSolar non trovate nei Secrets di Streamlit! Verifica di aver impostato `FUSIONSOLAR_USERNAME` e `FUSIONSOLAR_PASSWORD` nei Secrets.")
+        token = None
+    else:
+        token = get_fusionsolar_token(fs_user, fs_pass)
+        if not token:
+            st.error("❌ Impossibile ottenere il Token dalle API Huawei FusionSolar. Verifica le credenziali nei Secrets.")
 
     with st.spinner("Connessione alle API Huawei FusionSolar e calcolo irraggiamento..."):
         performance_list = []
@@ -153,10 +161,8 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             tilt = float(row['Tilt (°)'])
             azimuth = float(row['Azimut (°)'])
 
-            # 1. Calcolo Irraggiamento e Produzione Teorica
+            # 1. Calcolo Irraggiamento e Produzione Attesa
             cum_poa_wh, current_poa_w = get_poa_irradiance_data(lat, lon, tilt, azimuth, now)
-            
-            # PR di impianto medio standard: ~82-85%
             performance_ratio = 0.82
             prod_attesa = round(potenza * (cum_poa_wh / 1000.0) * performance_ratio, 2)
 
@@ -167,14 +173,14 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
                 prod_reale_display = prod_reale_api
                 diff_perc = round(((prod_reale_api - prod_attesa) / prod_attesa) * 100, 2) if prod_attesa > 0 else 0.0
             else:
-                prod_reale_display = "In attesa di Token API..."
+                prod_reale_display = "N/D (Errore API/Secret)"
                 diff_perc = 0.0
 
             performance_list.append({
                 "Nome Impianto": nome,
                 "Potenza (kWp)": potenza,
                 "Tilt / Azimut": f"{tilt}° / {azimuth}°",
-                "Irraggiamento Istantaneo": f"{current_poa_w} W/m²",
+                "Irraggiamento Piano Moduli": f"{current_poa_w} W/m²",
                 "Prod. Attesa Cumulata (kWh)": prod_attesa,
                 "Prod. Reale API Huawei (kWh)": prod_reale_display,
                 "Scostamento (%)": diff_perc
