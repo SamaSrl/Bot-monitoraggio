@@ -20,7 +20,6 @@ def calculate_poa_irradiance(lat, lon, tilt, azimuth, current_time):
     - Tilt (Inclinazione pannelli)
     - Azimut (Orientamento rispetto al Sud: 180° = Sud, 90° = Est, 270° = Ovest)
     """
-    # 1. Recupera irraggiamento solare globale e diretto da Open-Meteo per l'ora corrente
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
         f"&hourly=direct_normal_irradiance,diffuse_radiation,global_tilted_irradiance"
@@ -49,42 +48,33 @@ def calculate_poa_irradiance(lat, lon, tilt, azimuth, current_time):
     day_of_year = current_time.timetuple().tm_yday
     hour_float = current_time.hour + current_time.minute / 60.0
 
-    # Declinazione solare (in radianti)
     declination = math.radians(23.45 * math.sin(math.radians((360 / 365) * (day_of_year - 81))))
-    
-    # Latitudine in radianti
     lat_rad = math.radians(lat)
     
-    # Angolo orario (omega) - 12:00 solare = 0°
     solar_time = hour_float + (4 * (lon - 15) / 60) # approssimazione fuso orario CET
     omega = math.radians((solar_time - 12) * 15)
 
-    # Altezza solare (alpha)
     sin_alpha = math.sin(lat_rad) * math.sin(declination) + math.cos(lat_rad) * math.cos(declination) * math.cos(omega)
     sin_alpha = max(-1.0, min(1.0, sin_alpha))
-    alpha = math.asin(sin_alpha) # Angolo di elevazione solare
+    alpha = math.asin(sin_alpha)
 
     if alpha <= 0:
-        return 0.0 # Il sole è sotto l'orizzonte
+        return 0.0
 
-    # Azimut solare (gamma_s)
     cos_gamma_s = (math.sin(declination) * math.cos(lat_rad) - math.cos(declination) * math.sin(lat_rad) * math.cos(omega)) / math.cos(alpha)
     cos_gamma_s = max(-1.0, min(1.0, cos_gamma_s))
     gamma_s = math.acos(cos_gamma_s)
     if omega > 0:
         gamma_s = 2 * math.pi - gamma_s
 
-    # 3. Orientamento Pannello (Convertito in radianti)
-    beta = math.radians(tilt) # Inclinazione
-    gamma = math.radians(azimuth) # Azimut (180° = Sud)
+    beta = math.radians(tilt)
+    gamma = math.radians(azimuth)
 
-    # 4. Angolo di Incidenza Solare (theta)
     cos_theta = math.cos(alpha) * math.sin(beta) * math.cos(gamma_s - gamma) + math.sin(alpha) * math.cos(beta)
-    cos_theta = max(0.0, cos_theta) # Se > 90° il sole è dietro il pannello
+    cos_theta = max(0.0, cos_theta)
 
-    # 5. Irraggiamento Effettivo sul Piano dei Moduli (POA - Plane of Array)
     poa_direct = dni * cos_theta
-    poa_diffuse = dhi * (1 + math.cos(beta)) / 2 # Modello Isotropo Diffuso
+    poa_diffuse = dhi * (1 + math.cos(beta)) / 2
     poa_total = poa_direct + poa_diffuse
 
     return round(poa_total, 2)
@@ -181,7 +171,6 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
         now = datetime.datetime.now()
         current_hour = now.hour
 
-        # Stima ore di sole cumulate fino all'ora corrente per stimare la produzione del giorno
         hours_active = max(0, min(current_hour - 6, 12)) if current_hour >= 6 else 0
 
         for idx, row in edited_df.iterrows():
@@ -193,21 +182,16 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             tilt = float(row['Tilt (°)'])
             azimuth = float(row['Azimut (°)'])
 
-            # 1. Calcola l'irraggiamento sul piano dei pannelli (POA)
             poa_irr = calculate_poa_irradiance(lat, lon, tilt, azimuth, now)
 
-            # 2. Produzione Attesa oraria / cumulata stimata (kWh)
-            # Formula: Potenza (kWp) * Irraggiamento modulato (kW/m²) * Ore attive * Efficienza (85%)
             efficiency_factor = 0.85
             if hours_active > 0 and poa_irr > 0:
                 prod_attesa = round(potenza * (poa_irr / 1000) * (hours_active * 0.65) * efficiency_factor, 2)
             else:
                 prod_attesa = 0.0
 
-            # 3. Lettura Produzione Reale (kWh)
             prod_reale = get_fusionsolar_real_production(st_code)
 
-            # 4. Scostamento Percentuale
             if prod_attesa > 0:
                 diff_perc = round(((prod_reale - prod_attesa) / prod_attesa) * 100, 2)
             else:
@@ -225,7 +209,7 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
 
         perf_df = pd.DataFrame(performance_list)
 
-        # Stile condizionale sui colori dello scostamento
+        # Stile condizionale sui colori dello scostamento (usando map al posto di applymap)
         def color_scostamento(val):
             try:
                 num = float(val)
@@ -234,7 +218,8 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             except Exception:
                 return ''
 
-        styled_df = perf_df.style.applymap(color_scostamento, subset=['Scostamento (%)'])\
+        # Utilizziamo .map per garantire compatibilità con tutte le versioni di Pandas
+        styled_df = perf_df.style.map(color_scostamento, subset=['Scostamento (%)'])\
                                   .format({"Scostamento (%)": "{:+.2f}%"})
 
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
