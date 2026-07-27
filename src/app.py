@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="FusionSolar - Test Rotte", page_icon="🗺️")
-st.title("🗺️ Test Rotte Ufficiali Huawei OpenAPI")
+st.set_page_config(page_title="FusionSolar - Test Endpoint Kiosk/KPI", page_icon="🔍")
+st.title("🔍 Test Endpoint Monitoraggio")
 
 API_USER = (
     st.secrets.get("huawei", {}).get("username")
@@ -18,7 +18,7 @@ API_PASS = (
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-if st.button("🚀 Esegui Test Rotte", type="primary"):
+if st.button("🚀 Esegui Test Kiosk/KPI", type="primary"):
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
 
@@ -37,12 +37,12 @@ if st.button("🚀 Esegui Test Rotte", type="primary"):
         "X-SRT": token
     })
 
-    # ROTTE REALI DA VERIFICARE
+    # ROTTE NORTHBOUND KIOSK E KPI
     endpoints_to_test = [
-        f"{BASE_DOMAIN}/rest/openapi/getStationList",
-        f"{BASE_DOMAIN}/rest/pvms/v1/getStationList",
-        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/stationList",
-        f"{BASE_DOMAIN}/getStationList"
+        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationRealKpi",
+        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getDevList",
+        f"{BASE_DOMAIN}/rest/pvms/v1/kiosk/getKioskRealKpi",
+        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getPlantList"
     ]
 
     for ep in endpoints_to_test:
