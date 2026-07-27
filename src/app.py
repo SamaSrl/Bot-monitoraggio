@@ -5,14 +5,13 @@ import pandas as pd
 import streamlit as st
 
 # --- CONFIGURAZIONE PAGINA STREAMLIT ---
-# Deve essere la PRIMA chiamata Streamlit del file
 st.set_page_config(
     page_title="Gestione Impianti & Report FusionSolar",
     page_icon="☀️",
     layout="wide"
 )
 
-# --- RECUPERO CREDENZIALI DA STREAMLIT / GITHUB SECRETS ---
+# --- RECUPERO CREDENZIALI DA STREAMLIT SECRETS ---
 def get_secret_credentials():
     """Estrae username e password/systemCode dai Secrets configurati su Streamlit Cloud."""
     username = (
@@ -26,27 +25,25 @@ def get_secret_credentials():
     )
     return username, password
 
-# --- API FUSIONSOLAR: AUTENTICAZIONE E RETRIEVAL DATI (V1.0) ---
+# --- API FUSIONSOLAR: AUTENTICAZIONE NORTHBOUND ---
 def get_fusionsolar_token(username, password):
     """
-    Richiede il token di sessione X-SRT all'API Huawei FusionSolar Northbound API (v1.0).
-    Converte la password in MD5 se fornita in chiaro.
+    Richiede il token di sessione X-SRT all'API Huawei FusionSolar Northbound API.
+    I gateway API ufficiali europei sono uni001eu5 e region01eu5.
     """
     if not username or not password:
-        return None, "Username o Password mancanti nei Secrets di Streamlit."
+        return None, None, "Username o Password mancanti nei Secrets di Streamlit."
 
-    # Hashing MD5 della password se non è già formattata a 32 caratteri
+    # Hashing MD5 della password se non è già a 32 caratteri
     if len(str(password)) != 32:
         system_code = hashlib.md5(str(password).encode('utf-8')).hexdigest()
     else:
         system_code = str(password)
 
-    # Endpoint ufficiali Northbound API v1.0 e Open API Huawei
-    endpoints = [
-        "https://eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
-        "https://uni001eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
-        "https://region01eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
-        "https://eu5.fusionsolar.huawei.com/thirdparty/open/login"
+    # Server Gateway dedicati alle API Huawei FusionSolar in Europa
+    api_hosts = [
+        "https://uni001eu5.fusionsolar.huawei.com",
+        "https://region01eu5.fusionsolar.huawei.com"
     ]
 
     payload = {
@@ -55,40 +52,36 @@ def get_fusionsolar_token(username, password):
     }
     headers = {"Content-Type": "application/json"}
 
-    last_error = "Nessun endpoint Huawei v1.0 raggiungibile."
+    error_logs = []
 
-    for url in endpoints:
+    for base_url in api_hosts:
+        url = f"{base_url}/thirdparty/login"
         try:
             res = requests.post(url, json=payload, headers=headers, timeout=10)
-            
-            # Se la risposta è 200 OK, analizziamo il JSON
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
                     token = res.headers.get("X-SRT") or data.get("data")
-                    return token, None
+                    return token, base_url, None
                 else:
                     fail_code = data.get("failCode", "N/D")
                     message = data.get("message", "Credenziali o SystemCode errati")
-                    last_error = f"Risposta Huawei ({url}) -> Codice {fail_code}: {message}"
-                    # Se il server ha risposto con JSON valido, l'endpoint è corretto ma le credenziali no
-                    break 
+                    error_logs.append(f"{base_url} -> Codice {fail_code}: {message}")
             else:
-                last_error = f"HTTP {res.status_code} su {url}"
-        except requests.exceptions.RequestException:
-            continue
+                error_logs.append(f"{base_url} -> HTTP Status {res.status_code}")
+        except requests.exceptions.RequestException as e:
+            error_logs.append(f"{base_url} -> Errore Connessione/DNS: {str(e)}")
 
-    return None, last_error
+    return None, None, " | ".join(error_logs)
 
-def get_fusionsolar_real_kpi(station_code, token):
+def get_fusionsolar_real_kpi(station_code, token, active_host):
     """
-    Interroga l'API Huawei FusionSolar v1.0 per recuperare la produzione reale odierna (day_power) in kWh.
+    Interroga l'API Huawei FusionSolar per recuperare la produzione reale odierna (day_power) in kWh.
     """
-    if not token:
+    if not token or not active_host:
         return None
 
-    # Endpoint aggiornato alla versione v1.0
-    url = "https://eu5.fusionsolar.huawei.com/thirdparty/v1.0/getStationRealKpi"
+    url = f"{active_host}/thirdparty/getStationRealKpi"
     headers = {"Content-Type": "application/json", "X-SRT": token}
     payload = {"stationCodes": station_code}
 
@@ -230,13 +223,13 @@ st.markdown("## 📊 Performance Produzione Odierna (Attesa vs Reale API)")
 if st.button("📈 Calcola Performance Odierna", type="secondary"):
     fs_user, fs_pass = get_secret_credentials()
     
-    token = None
+    token, active_host = None, None
     if not fs_user or not fs_pass:
         st.error("⚠️ Credenziali FusionSolar non trovate nei Secrets di Streamlit! Verifica `FUSIONSOLAR_USERNAME` e `FUSIONSOLAR_PASSWORD`.")
     else:
-        token, err_msg = get_fusionsolar_token(fs_user, fs_pass)
+        token, active_host, err_msg = get_fusionsolar_token(fs_user, fs_pass)
         if not token:
-            st.error(f"❌ Impossibile ottenere il Token dalle API Huawei FusionSolar. Dettaglio: {err_msg}")
+            st.error(f"❌ Impossibile ottenere il Token dalle API Huawei FusionSolar. Dettagli tentativi: {err_msg}")
 
     with st.spinner("Connessione alle API Huawei FusionSolar e calcolo irraggiamento..."):
         performance_list = []
@@ -257,7 +250,7 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             prod_attesa = round(potenza * (cum_poa_wh / 1000.0) * performance_ratio, 2)
 
             # 2. Lettura Reale da API FusionSolar
-            prod_reale_api = get_fusionsolar_real_kpi(st_code, token) if token else None
+            prod_reale_api = get_fusionsolar_real_kpi(st_code, token, active_host) if token else None
 
             if prod_reale_api is not None:
                 prod_reale_display = prod_reale_api
