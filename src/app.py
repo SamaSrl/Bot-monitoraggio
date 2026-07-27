@@ -1,3 +1,10 @@
+Ora ci siamo! Invece di far inserire le coordinate a mano una alla volta, colleghiamo la sezione meteo direttamente alla tabella degli impianti.
+
+Così facendo, quando premi il pulsante, lo script legge tutti gli impianti presenti nella tabella con le rispettive latitudini e longitudini e mostra una comoda lista (o griglia) con il meteo aggiornato di ciascun sito!
+
+Ecco il codice completo aggiornato per src/app.py:
+
+Python
 import streamlit as st
 import pandas as pd
 import requests
@@ -39,14 +46,13 @@ def get_weather_data(latitude, longitude):
             current = data["current_weather"]
             w_code = current.get("weathercode", 0)
             return {
-                "temperature": current.get("temperature", "N/D"),
-                "windspeed": current.get("windspeed", "N/D"),
+                "temperature": f"{current.get('temperature', 'N/D')} °C",
+                "windspeed": f"{current.get('windspeed', 'N/D')} km/h",
                 "condition": weather_codes.get(w_code, "Variabile 🌤️")
             }
         else:
             return None
-    except Exception as e:
-        st.error(f"Errore nel recupero dei dati meteo: {e}")
+    except Exception:
         return None
 
 # --- INTERFACCIA UTENTE ---
@@ -77,6 +83,7 @@ data = {
 }
 df = pd.DataFrame(data)
 
+# Tabella modificabile
 edited_df = st.data_editor(
     df,
     hide_index=True,
@@ -86,32 +93,43 @@ edited_df = st.data_editor(
 
 st.markdown("---")
 
-# 2. SEZIONE METEO DEL GIORNO
-st.markdown("## 🌤️ Previsioni Meteo del Giorno")
-st.markdown("Inserisci le coordinate per visualizzare il meteo in tempo reale:")
+# 2. SEZIONE METEO AUTOMATICA PER TUTTI GLI IMPIANTI
+st.markdown("## 🌤️ Previsioni Meteo per Tutti gli Impianti")
+st.markdown("Recupera automaticamente le condizioni meteo attuali basandosi sulle coordinate di ciascun impianto in tabella.")
 
-c_lat, c_lon, c_btn = st.columns([2, 2, 1])
-
-with c_lat:
-    lat_val = st.number_input("Latitudine (°N)", value=45.81, format="%.2f", step=0.01)
-
-with c_lon:
-    lon_val = st.number_input("Longitudine (°E)", value=13.22, format="%.2f", step=0.01)
-
-with c_btn:
-    st.markdown("<br>", unsafe_allow_html=True)
-    check_weather = st.button("🌦️ Ottieni Meteo", use_container_width=True)
-
-if check_weather:
-    with st.spinner("Aggiornamento meteo in corso..."):
-        w = get_weather_data(lat_val, lon_val)
-        if w:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Stato del Tempo", w['condition'])
-            m2.metric("Temperatura", f"{w['temperature']} °C")
-            m3.metric("Velocità Vento", f"{w['windspeed']} km/h")
-        else:
-            st.warning("Nessun dato meteo trovato per queste coordinate.")
+if st.button("🌦️ Aggiorna Meteo per Tutti gli Impianti", type="secondary"):
+    with st.spinner("Scaricamento dati meteo per tutti gli impianti..."):
+        weather_list = []
+        
+        # Ciclo su tutte le righe della tabella modificata dall'utente
+        for idx, row in edited_df.iterrows():
+            nome = row['Nome Impianto']
+            lat = row['Latitudine']
+            lon = row['Longitudine']
+            
+            w_data = get_weather_data(lat, lon)
+            if w_data:
+                weather_list.append({
+                    "Nome Impianto": nome,
+                    "Latitudine": lat,
+                    "Longitudine": lon,
+                    "Condizione Meteo": w_data['condition'],
+                    "Temperatura": w_data['temperature'],
+                    "Velocità Vento": w_data['windspeed']
+                })
+            else:
+                weather_list.append({
+                    "Nome Impianto": nome,
+                    "Latitudine": lat,
+                    "Longitudine": lon,
+                    "Condizione Meteo": "N/D",
+                    "Temperatura": "N/D",
+                    "Velocità Vento": "N/D"
+                })
+        
+        # Mostra i risultati sotto forma di tabella pulita
+        res_df = pd.DataFrame(weather_list)
+        st.dataframe(res_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
