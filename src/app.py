@@ -26,26 +26,27 @@ def get_secret_credentials():
     )
     return username, password
 
-# --- API FUSIONSOLAR: AUTENTICAZIONE E RETRIEVAL DATI ---
+# --- API FUSIONSOLAR: AUTENTICAZIONE E RETRIEVAL DATI (V1.0) ---
 def get_fusionsolar_token(username, password):
     """
-    Richiede il token di sessione X-SRT all'API Huawei FusionSolar.
-    Converte la password in MD5 (richiesto da Huawei Northbound API).
+    Richiede il token di sessione X-SRT all'API Huawei FusionSolar Northbound API (v1.0).
+    Converte la password in MD5 se fornita in chiaro.
     """
     if not username or not password:
         return None, "Username o Password mancanti nei Secrets di Streamlit."
 
-    # Hashing MD5 se la password non è già un hash a 32 caratteri
+    # Hashing MD5 della password se non è già formattata a 32 caratteri
     if len(str(password)) != 32:
         system_code = hashlib.md5(str(password).encode('utf-8')).hexdigest()
     else:
         system_code = str(password)
 
-    # Solo endpoint Europei reali e risolvibili
+    # Endpoint ufficiali Northbound API v1.0 e Open API Huawei
     endpoints = [
-        "https://eu5.fusionsolar.huawei.com/thirdparty/login",
-        "https://uni001eu5.fusionsolar.huawei.com/thirdparty/login",
-        "https://region01eu5.fusionsolar.huawei.com/thirdparty/login"
+        "https://eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
+        "https://uni001eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
+        "https://region01eu5.fusionsolar.huawei.com/thirdparty/v1.0/login",
+        "https://eu5.fusionsolar.huawei.com/thirdparty/open/login"
     ]
 
     payload = {
@@ -54,11 +55,13 @@ def get_fusionsolar_token(username, password):
     }
     headers = {"Content-Type": "application/json"}
 
-    last_error = "Nessun server Huawei raggiungibile."
+    last_error = "Nessun endpoint Huawei v1.0 raggiungibile."
 
     for url in endpoints:
         try:
             res = requests.post(url, json=payload, headers=headers, timeout=10)
+            
+            # Se la risposta è 200 OK, analizziamo il JSON
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
@@ -67,25 +70,25 @@ def get_fusionsolar_token(username, password):
                 else:
                     fail_code = data.get("failCode", "N/D")
                     message = data.get("message", "Credenziali o SystemCode errati")
-                    last_error = f"Risposta Huawei da {url} -> Code {fail_code}: {message}"
-                    # Se il server ha risposto con JSON, il dominio è raggiungibile ma le credenziali non sono valide
+                    last_error = f"Risposta Huawei ({url}) -> Codice {fail_code}: {message}"
+                    # Se il server ha risposto con JSON valido, l'endpoint è corretto ma le credenziali no
                     break 
             else:
-                last_error = f"HTTP Status {res.status_code} su {url}"
+                last_error = f"HTTP {res.status_code} su {url}"
         except requests.exceptions.RequestException:
-            # Passa al dominio successivo se questo non risponde/non è raggiungibile
             continue
 
     return None, last_error
 
 def get_fusionsolar_real_kpi(station_code, token):
     """
-    Interroga l'API Huawei FusionSolar per recuperare la produzione reale odierna (day_power) in kWh.
+    Interroga l'API Huawei FusionSolar v1.0 per recuperare la produzione reale odierna (day_power) in kWh.
     """
     if not token:
         return None
 
-    url = "https://eu5.fusionsolar.huawei.com/thirdparty/getStationRealKpi"
+    # Endpoint aggiornato alla versione v1.0
+    url = "https://eu5.fusionsolar.huawei.com/thirdparty/v1.0/getStationRealKpi"
     headers = {"Content-Type": "application/json", "X-SRT": token}
     payload = {"stationCodes": station_code}
 
@@ -229,7 +232,7 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
     
     token = None
     if not fs_user or not fs_pass:
-        st.error("⚠️ Credenziali FusionSolar non trovate nei Secrets di Streamlit! Verifica di aver impostato `FUSIONSOLAR_USERNAME` e `FUSIONSOLAR_PASSWORD` nei Secrets.")
+        st.error("⚠️ Credenziali FusionSolar non trovate nei Secrets di Streamlit! Verifica `FUSIONSOLAR_USERNAME` e `FUSIONSOLAR_PASSWORD`.")
     else:
         token, err_msg = get_fusionsolar_token(fs_user, fs_pass)
         if not token:
