@@ -19,7 +19,6 @@ API_PASS = (
     or st.secrets.get("FUSIONSOLAR_PASSWORD", "")
 )
 
-# Base URL per EU5
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -43,29 +42,31 @@ def get_huawei_stations(username, password):
         if not token:
             return None, "Impossibile estrarre il token dalla risposta di Login.", None
 
-        # Header sessione per Huawei APIG
+        # Header sessione per Huawei
         session.headers.update({
             "accessSession": token,
             "xsrf-token": token,
             "X-SRT": token
         })
 
-        # 2. PROVA ENDPOINT 1 (Standard OpenAPI PVMS)
-        endpoint_1 = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
-        res_list = session.post(endpoint_1, json={"pageNo": 1}, timeout=12)
-        data_list = res_list.json()
+        # Lista degli endpoint ufficiali da provare in sequenza
+        endpoints_to_try = [
+            f"{BASE_DOMAIN}/thirdparty/station/list",
+            f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
+        ]
 
-        # Se dà errore APIG.0101 (API non esistente), proviamo l'ENDPOINT 2 (Thirdparty API)
-        if data_list.get("error_code") == "APIG.0101":
-            endpoint_2 = f"{BASE_DOMAIN}/thirdparty/station/list"
-            res_list = session.post(endpoint_2, json={"pageNo": 1, "pageSize": 100}, timeout=12)
-            data_list = res_list.json()
-
-        # Se dà ancora APIG.0101, proviamo l'ENDPOINT 3 (OpenAPI v1 generico)
-        if data_list.get("error_code") == "APIG.0101":
-            endpoint_3 = f"{BASE_DOMAIN}/rest/openapi/pv/v1/station/list"
-            res_list = session.post(endpoint_3, json={"pageNo": 1}, timeout=12)
-            data_list = res_list.json()
+        data_list = {}
+        for ep in endpoints_to_try:
+            res_list = session.post(ep, json={"pageNo": 1}, timeout=12)
+            if res_list.status_code == 200:
+                try:
+                    data = res_list.json()
+                    # Se non risponde con errore di rotta non trovata, lo usiamo
+                    if data.get("error_code") != "APIG.0101":
+                        data_list = data
+                        break
+                except Exception:
+                    continue
 
         # Estrazione stazioni
         stations = []
@@ -90,7 +91,7 @@ if API_PASS:
     if st.button("🔄 Connetti e Carica Impianti", type="primary"):
         st.cache_data.clear()
 
-    with st.spinner("Autenticazione e ricerca percorsi API in corso..."):
+    with st.spinner("Autenticazione e recupero impianti in corso..."):
         stations, err, raw_json = get_huawei_stations(API_USER, API_PASS)
 
     if err:
