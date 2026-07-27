@@ -1,10 +1,22 @@
+Ecco il codice completo e definitivo per il tuo file app.py.
+
+Contiene:
+
+Autenticazione Huawei OpenAPI PVMS v1 (senza MD5, con invio password in chiaro e recupero del token X-SRT dagli header).
+
+Gestione Fuso Orario Europe/Rome nativo con zoneinfo (compatibile con Streamlit Cloud senza dipendere da pytz).
+
+Calcolo della Produzione Attesa al minuto esatto con l'integrazione pro-quota dei minuti dell'ora corrente.
+
+Dashboard Streamlit completa con KPI globali, stile condizionale della tabella e barra laterale per la configurazione.
+
+📄 File app.py
+Python
 import streamlit as st
 import pandas as pd
 import requests
-import hashlib
-import json
 import datetime
-import pytz
+from zoneinfo import ZoneInfo
 
 # ==========================================
 # 1. CONFIGURAZIONE PAGINA STREAMLIT
@@ -23,20 +35,16 @@ st.caption("Confronto Produzione Reale Huawei vs Produzione Stimata (Open-Meteo)
 # ==========================================
 HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
-def login_huawei(username, password_raw):
+def login_huawei(username, password):
     """
-    Effettua il login sulle API OpenAPI PVMS v1 di Huawei FusionSolar
-    usando l'hash MD5 della password dell'utente API.
+    Effettua il login sulle API OpenAPI PVMS v1 di Huawei FusionSolar.
+    Restituisce il token X-SRT dagli header della risposta HTTP.
     """
     url = f"{HUAWEI_BASE_URL}/login"
     headers = {"Content-Type": "application/json"}
-    
-    # Generazione Hash MD5 della password
-    md5_password = hashlib.md5(password_raw.encode('utf-8')).hexdigest()
-    
     payload = {
         "username": username,
-        "password": md5_password
+        "password": password  # Password in chiaro per OpenAPI PVMS v1
     }
     
     try:
@@ -44,7 +52,8 @@ def login_huawei(username, password_raw):
         if res.status_code == 200:
             data = res.json()
             if data.get("success"):
-                token = res.headers.get("X-SRT") or data.get("data")
+                # Recupera il token X-SRT dagli header (case-insensitive)
+                token = res.headers.get("X-SRT") or res.headers.get("xsrt")
                 return token, None
             elif data.get("failCode") == 407:
                 return None, "⏳ Limitazione frequenza Huawei (Rate limit: max 5 login/10 min). Attendi qualche minuto."
@@ -72,7 +81,6 @@ def get_station_kpi(token, station_code):
         if res.status_code == 200:
             data = res.json()
             if data.get("success") and data.get("data"):
-                # Ritorna il dizionario KPI della stazione richiesta
                 kpi_list = data.get("data", [])
                 if kpi_list:
                     return kpi_list[0].get("dataItemMap", {}), None
@@ -89,8 +97,8 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
     Calcola l'irraggiamento cumulato (Wh/m²) e la produzione attesa (kWh)
     dalle 00:00 di oggi fino al MINUTO ESATTO dell'esecuzione.
     """
-    tz_italy = pytz.timezone("Europe/Rome")
-    now_italy = datetime.datetime.now(tz_italy)
+    # Fuso orario italiano nativo senza pytz
+    now_italy = datetime.datetime.now(ZoneInfo("Europe/Rome"))
     
     current_hour = now_italy.hour
     current_minute = now_italy.minute
@@ -151,11 +159,10 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Parametri Performance")
 performance_ratio = st.sidebar.slider("Performance Ratio (PR)", min_value=0.70, max_value=0.95, value=0.85, step=0.01)
 
-# Tabella degli Impianti registrati
+# Tabella degli Impianti configurati
 st.sidebar.markdown("---")
-st.sidebar.subheader("📋 Lista Impianti Configurati")
+st.sidebar.subheader("📋 Lista Impianti")
 
-# Modifica questi dati o caricali da DB/CSV con le impostazioni reali degli impianti
 plants_data = [
     {"Name": "Omnia Immobiliare Moretto", "StationCode": "NE=12345601", "kWp": 99.8, "Lat": 46.06, "Lon": 13.23, "Tilt": 15, "Azimuth": 0},
     {"Name": "Omnia Steni Spilimbergo",  "StationCode": "NE=12345602", "kWp": 49.5, "Lat": 46.11, "Lon": 12.90, "Tilt": 10, "Azimuth": -15},
@@ -182,8 +189,7 @@ if btn_fetch:
         else:
             st.success("✅ Autenticazione API eseguita con successo!")
             
-            tz_italy = pytz.timezone("Europe/Rome")
-            now_str = datetime.datetime.now(tz_italy).strftime("%d/%m/%Y - %H:%M:%S")
+            now_str = datetime.datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y - %H:%M:%S")
             st.info(f"🕒 Ultimo aggiornamento: **{now_str}**")
 
             results = []
@@ -227,7 +233,7 @@ if btn_fetch:
 
             df_res = pd.DataFrame(results)
 
-            # --- KPI GLOBAL ---
+            # --- KPI GLOBALI ---
             st.markdown("### 📊 Riepilogo Complessivo")
             col1, col2, col3, col4 = st.columns(4)
             
@@ -244,7 +250,6 @@ if btn_fetch:
             # --- TABELLA DETTAGLIATA ---
             st.markdown("### 🏢 Dettaglio Singoli Impianti")
 
-            # Evidenzia la colonna Performance in base al risultato
             def color_performance(val):
                 if val >= 95.0:
                     color = '#d4edda' # verde chiaro
@@ -254,7 +259,7 @@ if btn_fetch:
                     color = '#f8d7da' # rosso chiaro
                 return f'background-color: {color}'
 
-            styled_df = df_res.style.applymap(color_performance, subset=['Performance (%)'])\
+            styled_df = df_res.style.map(color_performance, subset=['Performance (%)'])\
                                    .format({
                                        "Potenza (kWp)": "{:.1f}",
                                        "Potenza Istantanea (kW)": "{:.2f}",
