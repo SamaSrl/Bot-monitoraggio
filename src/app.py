@@ -1,17 +1,3 @@
-Ecco il codice completo e definitivo per il tuo file app.py.
-
-Contiene:
-
-Autenticazione Huawei OpenAPI PVMS v1 (senza MD5, con invio password in chiaro e recupero del token X-SRT dagli header).
-
-Gestione Fuso Orario Europe/Rome nativo con zoneinfo (compatibile con Streamlit Cloud senza dipendere da pytz).
-
-Calcolo della Produzione Attesa al minuto esatto con l'integrazione pro-quota dei minuti dell'ora corrente.
-
-Dashboard Streamlit completa con KPI globali, stile condizionale della tabella e barra laterale per la configurazione.
-
-📄 File app.py
-Python
 import streamlit as st
 import pandas as pd
 import requests
