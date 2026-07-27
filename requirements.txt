@@ -1,3 +1,4 @@
 streamlit
 requests
 fpdf
+requests>=2.28.0
