@@ -35,66 +35,86 @@ if not API_PASS:
     st.error("⚠️ Password non trovata nei Secrets di Streamlit!")
 
 # ==========================================
-# 3. FUNZIONE API HUAWEISOLAR ATOMICA
+# 3. CLIENT HUAWEI ROBUSTO CON AUTO-RETRY
 # ==========================================
 HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_all_huawei_data_cached(username, password):
-    """
-    Effettua Login, GetStationList e GetStationRealKpi in un'unica 
-    sessione HTTP per garantire la validità dei cookie/headers.
-    Cache attiva per 5 minuti (300s) per prevenire il rate limit.
-    """
-    session = requests.Session()
-    headers = {"Content-Type": "application/json"}
-    
-    # 1. Login
-    login_url = f"{HUAWEI_BASE_URL}/login"
-    login_payload = {"username": username, "password": password}
-    
-    try:
-        res_login = session.post(login_url, json=login_payload, headers=headers, timeout=12)
-        if res_login.status_code != 200:
-            return None, f"Errore HTTP Login: {res_login.status_code}"
-            
-        data_login = res_login.json()
-        if not data_login.get("success"):
-            msg = data_login.get("message", "Login fallito")
-            if data_login.get("failCode") in [407, 20002] or "frequency" in str(msg):
-                return None, "⏳ Limitazione login Huawei attiva. Attendi qualche minuto."
-            return None, f"Login fallito: {msg}"
-            
-        # Estrazione Token X-SRT e aggiornamento Session Headers
-        token = res_login.headers.get("X-SRT") or res_login.headers.get("xsrt")
-        session.headers.update({"X-SRT": token, "Content-Type": "application/json"})
-        
-        # 2. Download Lista Stazioni
-        list_url = f"{HUAWEI_BASE_URL}/getStationList"
-        res_list = session.post(list_url, json={}, timeout=12)
-        data_list = res_list.json()
-        
-        if not data_list.get("success") or not data_list.get("data"):
-            return None, f"Errore recupero stazioni: {data_list.get('message')}"
-        
-        stations = data_list.get("data", [])
-        
-        # 3. Download KPI reali per le stazioni
-        station_codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
-        kpi_map_result = {}
-        
-        if station_codes:
-            kpi_url = f"{HUAWEI_BASE_URL}/getStationRealKpi"
-            res_kpi = session.post(kpi_url, json={"stationCodes": ",".join(station_codes)}, timeout=12)
-            kpi_data = res_kpi.json()
-            if kpi_data.get("success") and kpi_data.get("data"):
-                for item in kpi_data.get("data", []):
-                    kpi_map_result[item.get("stationCode")] = item.get("dataItemMap", {})
-                    
-        return {"stations": stations, "kpi_map": kpi_map_result}, None
+class HuaweiClient:
+    def __init__(self, username, password):
+        self.username = username
+        self.password = password
+        self.session = requests.Session()
+        self.session.headers.update({"Content-Type": "application/json"})
+        self.token = None
 
-    except Exception as e:
-        return None, f"Errore di connessione API: {e}"
+    def login(self):
+        url = f"{HUAWEI_BASE_URL}/login"
+        payload = {"username": self.username, "password": self.password}
+        try:
+            res = self.session.post(url, json=payload, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("success"):
+                    self.token = res.headers.get("X-SRT") or res.headers.get("xsrt")
+                    self.session.headers.update({"X-SRT": self.token})
+                    return True, None
+                elif data.get("failCode") in [407, 20002] or "frequency" in str(data.get("message")):
+                    return False, "⏳ Rate Limit Huawei attivo (max 5 login in 10 min). Attendi qualche minuto."
+                else:
+                    return False, f"Login fallito: {data.get('message')}"
+            return False, f"Errore HTTP {res.status_code}"
+        except Exception as e:
+            return False, f"Errore Connessione Huawei: {e}"
+
+    def post_with_retry(self, endpoint, payload={}):
+        """Esegue una chiamata POST; se la sessione è scaduta (USER_MUST_RELOGIN), effettua il re-login automatico."""
+        if not self.token:
+            ok, err = self.login()
+            if not ok:
+                return None, err
+
+        url = f"{HUAWEI_BASE_URL}/{endpoint}"
+        try:
+            res = self.session.post(url, json=payload, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                # Se la sessione è scaduta, effettua un tentativo di re-login al volo
+                if data.get("failCode") == 305 or "USER_MUST_RELOGIN" in str(data.get("message")):
+                    ok, err = self.login()
+                    if not ok:
+                        return None, err
+                    # Riprova la chiamata dopo il login
+                    res = self.session.post(url, json=payload, timeout=10)
+                    data = res.json()
+
+                if data.get("success"):
+                    return data.get("data"), None
+                return None, data.get("message")
+            return None, f"Errore HTTP {res.status_code}"
+        except Exception as e:
+            return None, f"Errore Chiamata: {e}"
+
+    def get_all_data(self):
+        # 1. Login iniziale
+        ok, err = self.login()
+        if not ok:
+            return None, err
+
+        # 2. Download Stazioni
+        stations, err = self.post_with_retry("getStationList")
+        if err or not stations:
+            return None, f"Errore Stazioni: {err}"
+
+        # 3. Download KPI
+        station_codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
+        kpi_map = {}
+        if station_codes:
+            kpi_data, err_kpi = self.post_with_retry("getStationRealKpi", {"stationCodes": ",".join(station_codes)})
+            if kpi_data:
+                for item in kpi_data:
+                    kpi_map[item.get("stationCode")] = item.get("dataItemMap", {})
+
+        return {"stations": stations, "kpi_map": kpi_map}, None
 
 # ==========================================
 # 4. CALCOLO PRODUZIONE ATTESA (OPEN-METEO)
@@ -119,7 +139,7 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
     current_instant_w = 0.0
 
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=8)
         if res.status_code == 200:
             data = res.json()
             hourly_tilted = data.get("hourly", {}).get("global_tilted_irradiance", [])
@@ -133,8 +153,8 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
                     current_instant_w = float(hourly_tilted[current_hour])
                     cumulative_poa_wh += current_instant_w * (current_minute / 60.0)
 
-    except Exception as e:
-        st.warning(f"⚠️ Errore Open-Meteo ({lat}, {lon}): {e}")
+    except Exception:
+        pass
 
     psh = cumulative_poa_wh / 1000.0
     expected_kwh = kwp * psh * pr
@@ -152,26 +172,28 @@ st.sidebar.header("⚙️ Impostazioni Globali")
 performance_ratio = st.sidebar.slider("Performance Ratio (PR)", min_value=0.70, max_value=0.95, value=0.85, step=0.01)
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"👤 Utente API dai Secrets: **{API_USER}**")
+st.sidebar.info(f"👤 Utente API: **{API_USER}**")
 
 # ==========================================
 # 6. DASHBOARD PRINCIPALE
 # ==========================================
-btn_fetch = st.button("🔄 Aggiorna Dati In Tempo Reale", type="primary")
+col_btn, col_blank = st.columns([1, 4])
+with col_btn:
+    btn_fetch = st.button("🔄 Aggiorna Dati In Tempo Reale", type="primary")
 
 if btn_fetch or "huawei_raw" not in st.session_state:
-    if not API_PASS:
-        st.error("Inserisci la password nei Secrets per procedere.")
-    else:
-        with st.spinner("Connessione in corso a Huawei FusionSolar..."):
-            huawei_data, err = get_all_huawei_data_cached(API_USER, API_PASS)
+    if API_PASS:
+        with st.spinner("Connessione in corso con Huawei FusionSolar..."):
+            client = HuaweiClient(API_USER, API_PASS)
+            huawei_data, err = client.get_all_data()
 
         if err:
-            st.error(err)
+            st.error(f"⚠️ {err}")
         else:
             st.session_state["huawei_raw"] = huawei_data
+            st.success("✅ Dati aggiornati con successo da Huawei!")
 
-# Mostra la dashboard se i dati sono disponibili
+# Mostra i dati
 if "huawei_raw" in st.session_state and st.session_state["huawei_raw"]:
     huawei_raw = st.session_state["huawei_raw"]
     stations = huawei_raw["stations"]
@@ -202,7 +224,7 @@ if "huawei_raw" in st.session_state and st.session_state["huawei_raw"]:
     df_config_input = pd.DataFrame(config_rows)
 
     st.markdown("### 🛠️ Personalizza Inclinazione (Tilt) e Orientamento (Azimuth)")
-    st.info("💡 Modifica i valori di **Tilt** e **Azimuth** per ciascun impianto direttamente nella tabella:")
+    st.info("💡 Modifica i valori di **Tilt** e **Azimuth** per ciascun impianto direttamente nella tabella sottostante:")
 
     edited_df = st.data_editor(
         df_config_input,
@@ -273,7 +295,7 @@ if "huawei_raw" in st.session_state and st.session_state["huawei_raw"]:
     tot_real = round(df_res["Produzione Reale (kWh)"].sum(), 2)
     tot_exp = round(df_res["Produzione Attesa (kWh)"].sum(), 2)
     avg_perf = round((tot_real / tot_exp * 100), 1) if tot_exp > 0 else 0.0
-    tot_power = round(df_res["Potenza Istantanea (kW)"].sum(), 2)
+    tot_power = round(df_res["Potenza Istantanea (kW)"] .sum(), 2)
 
     col1.metric("Produzione Reale Totale", f"{tot_real} kWh")
     col2.metric("Produzione Attesa Totale", f"{tot_exp} kWh")
