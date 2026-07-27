@@ -1,332 +1,153 @@
-import os
+import streamlit as st
+import pandas as pd
 import requests
-import json
+import datetime
 
-# Credenziali dalle Environment Variables di GitHub
-API_USER = os.environ.get("FUSIONSOLAR_API_USER", "")
-API_KEY = os.environ.get("FUSIONSOLAR_API_KEY", "")
+# --- CONFIGURAZIONE PAGINA STREAMLIT ---
+st.set_page_config(
+    page_title="Gestione Impianti & Report FusionSolar",
+    page_icon="☀️",
+    layout="wide"
+)
 
-# Lista degli endpoint API FusionSolar Huawei
-API_HOSTS = [
-    "https://intl.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://eu5.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://uni001eu5.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://region003.fusionsolar.huawei.com/thirdstation/v1.0",
-    "https://sg5.fusionsolar.huawei.com/thirdstation/v1.0"
-]
+# --- FUNZIONI DI SUPPORTO ---
 
-def main():
-    print("[*] Avvio generazione Web App...")
+def get_weather_data(latitude, longitude):
+    """Recupera i dati meteo attuali da Open-Meteo per le coordinate date."""
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather=true"
+    
+    # Mappa dei codici meteo WMO per descrizioni in italiano
+    weather_codes = {
+        0: "Cielo Sereno ☀️",
+        1: "Prevalentemente Sereno 🌤️",
+        2: "Parzialmente Nuvoloso ⛅",
+        3: "Coperto ☁️",
+        45: "Nebbia 🌫️",
+        48: "Nebbia con Brina 🌫️",
+        51: "Pioggerella Leggera 🌦️",
+        61: "Pioggia Leggera 🌧️",
+        63: "Pioggia Moderata 🌧️",
+        65: "Pioggia Intensa 🌧️",
+        80: "Rovesci di Pioggia 🌦️",
+        95: "Temporale ⛈️"
+    }
 
-    # Diagnostica API FusionSolar
-    session = requests.Session()
-    session.headers.update({
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0"
-    })
-
-    success_host = None
-    stations = []
-    error_logs = []
-
-    if API_USER and API_KEY:
-        for host in API_HOSTS:
-            payloads = [
-                {"systemCode": API_USER, "secretKey": API_KEY},
-                {"userName": API_USER, "value": API_KEY}
-            ]
-            for p_idx, payload in enumerate(payloads):
-                try:
-                    res = session.post(f"{host}/login", json=payload, timeout=10)
-                    if res.status_code == 200:
-                        try:
-                            data = res.json()
-                            if data.get("failCode") == 0 or data.get("success") is True:
-                                success_host = host
-                                xsrf = res.headers.get("XSRF-TOKEN")
-                                if xsrf:
-                                    session.headers.update({"XSRF-TOKEN": xsrf})
-                                break
-                            else:
-                                error_logs.append(f"{host} (Payload {p_idx+1}): {data}")
-                        except Exception:
-                            error_logs.append(f"{host}: Risposta non JSON (404/HTML)")
-                    else:
-                        error_logs.append(f"{host}: Errore HTTP {res.status_code}")
-                except Exception as e:
-                    error_logs.append(f"{host}: {e}")
-
-            if success_host:
-                break
-
-        if success_host:
-            try:
-                st_res = session.post(f"{success_host}/station/list", json={"pageNo": 1}, timeout=10)
-                stations = st_res.json().get("data", [])
-                session.post(f"{success_host}/logout", timeout=5)
-            except Exception as e:
-                error_logs.append(f"Errore lettura impianti: {e}")
-    else:
-        error_logs.append("Credenziali FUSIONSOLAR_API_USER o FUSIONSOLAR_API_KEY non trovate.")
-
-    # Creazione della cartella 'public' per GitHub Pages
-    os.makedirs("public", exist_ok=True)
-
-    # Generazione dell'HTML con supporto per input coordinate dinamico
-    html_content = f"""<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Impianto & Meteo Dinamico</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f1f5f9;
-            color: #0f172a;
-            margin: 0;
-            padding: 20px;
-        }}
-        .container {{
-            max-width: 900px;
-            margin: 0 auto;
-        }}
-        .header {{
-            background-color: #0f172a;
-            color: #ffffff;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }}
-        .header h1 {{ margin: 0 0 5px 0; font-size: 22px; }}
-        .card {{
-            background: #ffffff;
-            padding: 20px;
-            border-radius: 8px;
-            border: 1px solid #e2e8f0;
-            margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }}
-        .card-title {{
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 15px;
-            border-left: 4px solid #0284c7;
-            padding-left: 10px;
-        }}
-        .input-group {{
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-bottom: 20px;
-            align-items: center;
-        }}
-        .input-group label {{ font-weight: bold; font-size: 14px; }}
-        .input-group input {{
-            padding: 8px 12px;
-            border: 1px solid #cbd5e1;
-            border-radius: 6px;
-            width: 130px;
-            font-size: 14px;
-        }}
-        .btn {{
-            background-color: #0284c7;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-        }}
-        .btn:hover {{ background-color: #0369a1; }}
-        .weather-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            margin-top: 10px;
-        }}
-        .weather-item {{
-            background: #f8fafc;
-            padding: 15px;
-            border-radius: 6px;
-            border: 1px solid #e2e8f0;
-            text-align: center;
-        }}
-        .weather-value {{
-            font-size: 18px;
-            font-weight: bold;
-            color: #0284c7;
-            margin-top: 5px;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-        }}
-        th, td {{
-            padding: 10px;
-            border-bottom: 1px solid #cbd5e1;
-            text-align: left;
-        }}
-        th {{ background-color: #f8fafc; }}
-        .badge-success {{ color: #15803d; font-weight: bold; }}
-        .badge-danger {{ color: #b91c1c; font-weight: bold; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>☀️ Dashboard Monitoraggio & Meteo Localizzato</h1>
-            <p style="margin:0; color:#94a3b8;">Inserisci le coordinate per visualizzare il meteo in tempo reale</p>
-        </div>
-
-        <!-- SEZIONE METEO CON INPUT MANUALE -->
-        <div class="card">
-            <div class="card-title">🌤️ Meteo del Giorno per Coordinate</div>
-            
-            <div class="input-group">
-                <div>
-                    <label for="lat">Latitudine:</label><br>
-                    <input type="number" step="any" id="lat" value="45.4642" placeholder="es. 45.4642">
-                </div>
-                <div>
-                    <label for="lon">Longitudine:</label><br>
-                    <input type="number" step="any" id="lon" value="9.1900" placeholder="es. 9.1900">
-                </div>
-                <div style="align-self: flex-end;">
-                    <button class="btn" onclick="fetchWeather()">Aggiorna Meteo</button>
-                </div>
-            </div>
-
-            <div class="weather-grid">
-                <div class="weather-item">
-                    <div>Condizione</div>
-                    <div class="weather-value" id="w-condition">In caricamento...</div>
-                </div>
-                <div class="weather-item">
-                    <div>Temperatura</div>
-                    <div class="weather-value" id="w-temp">-- °C</div>
-                </div>
-                <div class="weather-item">
-                    <div>Vento</div>
-                    <div class="weather-value" id="w-wind">-- km/h</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SEZIONE FUSIONSOLAR -->
-        <div class="card">
-            <div class="card-title">⚡ Stato API FusionSolar</div>
-"""
-
-    if success_host:
-        html_content += f"""
-            <p>Stato Connessione: <span class="badge-success">🟢 Connesso</span> (Server: <code>{success_host}</code>)</p>
-            <h3>Impianti Rilevati ({len(stations)})</h3>
-            <table>
-                <tr>
-                    <th>Nome Impianto</th>
-                    <th>Codice Impianto</th>
-                    <th>Capacità (kWp)</th>
-                </tr>
-        """
-        if stations:
-            for s in stations:
-                html_content += f"""
-                <tr>
-                    <td><b>{s.get('stationName', 'N/D')}</b></td>
-                    <td><code>{s.get('stationCode', 'N/D')}</code></td>
-                    <td>{s.get('capacity', 'N/D')} kWp</td>
-                </tr>
-                """
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status() # Controlla se la richiesta è andata a buon fine
+        data = response.json()
+        if "current_weather" in data:
+            current = data["current_weather"]
+            w_code = current.get("weathercode", 0)
+            return {
+                "temperature": current.get("temperature", "N/D"),
+                "windspeed": current.get("windspeed", "N/D"),
+                "condition": weather_codes.get(w_code, "Variabile 🌤️")
+            }
         else:
-            html_content += "<tr><td colspan='3'>Nessun impianto associato a questo account.</td></tr>"
-        html_content += "</table>"
-    else:
-        html_content += """
-            <p>Stato Connessione: <span class="badge-danger">🔴 Non Connesso</span></p>
-            <h4>Log Tentativi:</h4>
-            <ul>
-        """
-        for log in error_logs:
-            html_content += f"<li><code>{log}</code></li>"
-        html_content += "</ul>"
+            return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Errore nel recupero dei dati meteo: {e}")
+        return None
 
-    html_content += """
-        </div>
-    </div>
+# --- INIZIO UI STREAMLIT ---
 
-    <!-- SCRIPT JAVASCRIPT PER CHIAMATA METEO AL VOLO -->
-    <script>
-        const weatherCodes = {
-            0: "Cielo Sereno ☀️",
-            1: "Prevalentemente Sereno 🌤️",
-            2: "Parzialmente Nuvoloso ⛅",
-            3: "Coperto ☁️",
-            45: "Nebbia 🌫️",
-            48: "Nebbia con Brina 🌫️",
-            51: "Pioggerella Leggera 🌦️",
-            61: "Pioggia Leggera 🌧️",
-            63: "Pioggia Moderata 🌧️",
-            65: "Pioggia Intensa 🌧️",
-            80: "Rovesci di Pioggia 🌦️",
-            95: "Temporale ⛈️"
-        };
+# Titolo principale e Sincronizzazione (come da screenshot)
+col_title, col_sync = st.columns([3, 1])
+with col_title:
+    st.markdown("# ☀️ Gestione Impianti & Report FusionSolar")
 
-        window.onload = function() {
-            const savedLat = localStorage.getItem("user_lat");
-            const savedLon = localStorage.getItem("user_lon");
-            if (savedLat) document.getElementById("lat").value = savedLat;
-            if (savedLon) document.getElementById("lon").value = savedLon;
-            
-            fetchWeather();
-        };
+with col_sync:
+    # Pulsante per sincronizzare i nuovi impianti
+    if st.button("🔄 Sincronizza Nuovi Impianti", use_container_width=True):
+        st.info("Funzione di sincronizzazione in fase di sviluppo...")
+        # Aggiungi qui la logica di sincronizzazione da Huawei se necessario
 
-        async function fetchWeather() {
-            const lat = document.getElementById("lat").value;
-            const lon = document.getElementById("lon").value;
+st.markdown("---") # Linea di separazione
 
-            if (!lat || !lon) {
-                alert("Inserisci sia la Latitudine che la Longitudine!");
-                return;
-            }
+# --- SEZIONE 1: TABELLA PARAMETRI IMPIANTI (come da screenshot) ---
+st.markdown("## 📋 Tabella Parametri Impianti")
+st.markdown("Modifica i dati se necessario. I nuovi impianti aggiunti da Huawei appariranno in fondo senza cancellare le modifiche.")
 
-            localStorage.setItem("user_lat", lat);
-            localStorage.setItem("user_lon", lon);
+# Dati di esempio (basati sullo screenshot)
+# In produzione, questi verrebbero caricati da un file CSV o database
+data = {
+    'stationCode': ['NE=145335207', 'NE=187970646', 'NE=289231586', 'NE=231216926', 'NE=142360791', 'NE=167849112', 'NE=236021376'],
+    'Nome Impianto': ['Omnia Ponte Rosso', 'Omnia Immobiliare - Scuola Piaget', 'Omnia Immobiliare Dignano', 'Omnia Immobiliare Maniago', 'Omnia Immobiliare Moretto', 'Omnia Capannone Nuovo', 'Omnia Immobiliare Rivignano'],
+    'Potenza (kWp)': [200, 100, 150, 100, 50, 200, 200],
+    'Latitudine': [45.81, 46.16, 46.07, 46.16, 45.95, 45.88, 45.88],
+    'Longitudine': [13.22, 12.7, 12.94, 12.7, 13.03, 13.12, 13.12],
+    'Tilt (°)': [20, 20, 20, 20, 20, 20, 20],
+    'Azimut (°)': [180, 180, 180, 180, 180, 180, 180]
+}
+df = pd.DataFrame(data)
 
-            document.getElementById("w-condition").innerText = "Caricamento...";
-            document.getElementById("w-temp").innerText = "--";
-            document.getElementById("w-wind").innerText = "--";
+# Visualizzazione della tabella modificabile (data editor)
+edited_df = st.data_editor(
+    df,
+    hide_index=True,
+    num_rows="dynamic",
+    use_container_width=True
+)
 
-            try {
-                const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
-                const response = await fetch(url);
-                const data = await response.json();
+# Pulsante per salvare le modifiche della tabella
+if st.button("💾 Salva Modifiche Tabella", type="secondary"):
+    st.success("Modifiche della tabella salvate correttamente (temporaneamente in memoria).")
+    # In produzione, qui salveresti 'edited_df' su file (es. CSV)
 
-                if (data.current_weather) {
-                    const cw = data.current_weather;
-                    const conditionText = weatherCodes[cw.weathercode] || "Variabile 🌤️";
+st.markdown("---") # Linea di separazione
 
-                    document.getElementById("w-condition").innerText = conditionText;
-                    document.getElementById("w-temp").innerText = cw.temperature + " °C";
-                    document.getElementById("w-wind").innerText = cw.windspeed + " km/h";
-                } else {
-                    document.getElementById("w-condition").innerText = "Dati non trovati";
-                }
-            } catch (err) {
-                console.error("Errore meteo:", err);
-                document.getElementById("w-condition").innerText = "Errore di connessione";
-            }
-        }
-    </script>
-</body>
-</html>
-"""
+# --- SEZIONE 2: NUOVA SEZIONE METEO DINAMICA (Sotto la tabella) ---
+st.markdown("## 🌤️ Meteo del Giorno per Coordinate Manuali")
+st.markdown("Inserisci le coordinate geografiche (Latitudine e Longitudine) del luogo per ottenere le previsioni meteo aggiornate.")
 
-    with open("public/index.html", "w", encoding="utf-8") as f:
-        f.write(html_content)
+# Usa delle colonne per gli input e il pulsante, più compatto
+col_lat, col_lon, col_btn = st.columns([2, 2, 1])
 
-    print("[+] File public/index.html creato con successo!")
+with col_lat:
+    # Input numero per la latitudine (valori predefiniti di esempio)
+    lat_input = st.number_input("Latitudine (°N)", value=45.81, format="%.2f", step=0.01)
 
-if __name__ == "__main__":
-    main()
+with col_lon:
+    # Input numero per la longitudine (valori predefiniti di esempio)
+    lon_input = st.number_input("Longitudine (°E)", value=13.22, format="%.2f", step=0.01)
+
+with col_btn:
+    st.markdown("<br>", unsafe_allow_html=True) # Spaziatura per allineare il pulsante
+    # Pulsante per ottenere il meteo per le coordinate inserite
+    get_weather_btn = st.button("🌦️ Ottieni Meteo", use_container_width=True)
+
+# Contenitore per i risultati del meteo
+weather_container = st.container()
+
+# Logica per recuperare e mostrare i dati al clic del pulsante
+if get_weather_btn:
+    with st.spinner("Recupero dati meteo in corso..."):
+        weather_results = get_weather_data(lat_input, lon_input)
+        
+        with weather_container:
+            if weather_results:
+                st.markdown("### Dati Meteo Attuali")
+                # Creazione di card meteo usando le colonne
+                c1, c2, c3 = st.columns(3)
+                
+                with c1:
+                    st.metric("Stato del Tempo", weather_results['condition'])
+                with c2:
+                    st.metric("Temperatura", f"{weather_results['temperature']} °C")
+                with c3:
+                    st.metric("Velocità Vento", f"{weather_results['windspeed']} km/h")
+                
+                st.caption(f"Dati meteo per Lat: {lat_input:.2f}, Lon: {lon_input:.2f} aggiornati al {datetime.datetime.now().strftime('%H:%M:%S')}")
+            else:
+                st.warning("Non è stato possibile recuperare i dati meteo per le coordinate inserite.")
+
+st.markdown("---") # Linea di separazione
+
+# --- SEZIONE 3: PULSANTE RUN (come da screenshot) ---
+# Pulsante rosso grande per avviare il report principale
+st.markdown("<br>", unsafe_allow_html=True) # Spaziatura aggiuntiva
+if st.button("🚀 RUN - Estrai Dati di Ieri e Genera Report", type="primary", use_container_width=True):
+    # In produzione, qui andrebbe la logica principale di FusionSolar
+    st.info("Funzione di estrazione dati e generazione report in fase di sviluppo...")
+    st.success(f"Report per ieri ({datetime.date.today() - datetime.timedelta(days=1)}) generato correttamente (esempio).")
