@@ -1,15 +1,3 @@
-Ci è cascata di nuovo la prima riga di spiegazione nel file Python! 😅
-
-Nel file src/app.py è finita la frase "Ora ci siamo! Invece di far inserire..." prima del codice, scatenando il SyntaxError.
-
-🛠️ Soluzione Rapida
-Apri src/app.py su GitHub.
-
-Svuota completamente il file.
-
-Incolla solo il blocco di codice qui sotto (controlla che la prima riga sia import streamlit as st):
-
-Python
 import streamlit as st
 import pandas as pd
 import requests
