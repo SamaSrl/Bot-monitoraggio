@@ -36,20 +36,15 @@ if not API_PASS:
     st.error("⚠️ Password non trovata nei Secrets di Streamlit!")
 
 # ==========================================
-# 3. CHIAMATA ATOMICA ALL'API HUAWEI
+# 3. CHIAMATA ATOMICA ALL'API HUAWEI (STANDARD)
 # ==========================================
 HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_huawei_data_cached(username, password):
-    """
-    Effettua Login + List + RealKpi in un unico blocco.
-    Risultati memorizzati in cache per 15 minuti (900s) per rispettare i limiti Huawei.
-    """
     session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
 
-    # 1. LOGIN
+    # 1. LOGIN STANDARD
     login_url = f"{HUAWEI_BASE_URL}/login"
     login_payload = {"username": username, "password": password}
 
@@ -59,55 +54,35 @@ def fetch_huawei_data_cached(username, password):
         if res_login.status_code != 200:
             return None, f"Errore HTTP Login: {res_login.status_code}"
 
-        data_login = res_login.json()
-        if not data_login.get("success"):
-            msg = data_login.get("message", "")
-            fail_code = data_login.get("failCode")
-            if fail_code in [407, 20002] or "frequency" in str(msg).lower():
-                return None, "⏳ Limitazione frequenza Huawei attiva (max 5 login in 10 min). Attendi 10 minuti prima di riprovare."
-            return None, f"Login fallito: {msg} (failCode: {fail_code})"
-
-        # Estrazione precisa del Token dal responso esaminato
-        headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-        token = (
-            headers_lower.get("xsrf-token")
-            or session.cookies.get("XSRF-TOKEN")
-            or headers_lower.get("x-srt")
-        )
+        # Recupero Token da Header (X-SRT o xsrt)
+        token = res_login.headers.get("X-SRT") or res_login.headers.get("xsrt")
+        
+        # Se non è nell'header, verifichiamo se Huawei lo passa nel body
+        if not token:
+            try:
+                body = res_login.json()
+                if body.get("data"):
+                    token = body.get("data")
+            except Exception:
+                pass
 
         if not token:
-            return None, "Token di autenticazione non trovato nella risposta Huawei."
+            return None, "Impossibile recuperare il token di autenticazione."
 
-        # Impostazione degli header esatti richiesti dal gateway CloudWAF/Huawei
+        # Header standard Northbound API
         session.headers.update({
-            "X-XSRF-TOKEN": token,
-            "xsrf-token": token,
             "X-SRT": token,
-            "accessSession": token,
             "Content-Type": "application/json"
         })
 
-        # 2. LISTA STAZIONI
-        list_payload = {"pageNo": 1, "pageSize": 100}
-        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json=list_payload, timeout=12)
-        
-        try:
-            data_list = res_list.json()
-        except Exception:
-            return None, f"Risposta getStationList non valida (HTTP {res_list.status_code}): {res_list.text[:200]}"
-
-        if not data_list.get("success"):
-            # Fallback se l'API si aspetta body vuoto
-            res_list_retry = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
-            data_list = res_list_retry.json()
+        # 2. LISTA STAZIONI STANDARD
+        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
+        data_list = res_list.json()
 
         if not data_list.get("success"):
             return None, f"Errore recupero stazioni: {data_list.get('message')} (failCode: {data_list.get('failCode')})"
 
         stations = data_list.get("data", [])
-        if isinstance(stations, dict):
-            stations = stations.get("list", [])
-
         if not stations:
             return None, "Nessun impianto associato a questo account API Huawei."
 
