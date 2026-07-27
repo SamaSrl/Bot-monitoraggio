@@ -17,14 +17,22 @@ st.title("☀️ FusionSolar - Monitor In Tempo Reale")
 st.caption("Confronto Produzione Reale Huawei vs Produzione Stimata (Open-Meteo)")
 
 # ==========================================
-# 2. RECUPERO SECRETS
+# 2. RECUPERO SECRETS (FLESSIBILE)
 # ==========================================
-# Recupera le credenziali dai Secrets di Streamlit
-API_USER = st.secrets.get("huawei", {}).get("username", "Monitoragg_api")
-API_PASS = st.secrets.get("huawei", {}).get("password", "")
+API_USER = (
+    st.secrets.get("huawei", {}).get("username")
+    or st.secrets.get("username")
+    or st.secrets.get("FUSIONSOLAR_USERNAME", "Monitoragg_api")
+)
+
+API_PASS = (
+    st.secrets.get("huawei", {}).get("password")
+    or st.secrets.get("password")
+    or st.secrets.get("FUSIONSOLAR_PASSWORD", "")
+)
 
 if not API_PASS:
-    st.error("⚠️ Password non trovata nei Secrets! Configura [huawei] password in st.secrets.")
+    st.error("⚠️ Password non trovata nei Secrets di Streamlit!")
 
 # ==========================================
 # 3. FUNZIONI API HUAWEISOLAR (PVMS v1)
@@ -33,8 +41,8 @@ HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
 def get_huawei_data(username, password):
     """
-    Effettua login, scarica lista stazioni e KPI in una sola sessione HTTPS 
-    per prevenire l'errore USER_MUST_RELOGIN.
+    Esegue Login, Lista Stazioni e KPI in un'unica sessione
+    per evitare l'errore USER_MUST_RELOGIN.
     """
     session = requests.Session()
     headers = {"Content-Type": "application/json"}
@@ -63,13 +71,12 @@ def get_huawei_data(username, password):
         
         stations = data_list.get("data", [])
         
-        # 3. Download KPI per tutte le stazioni
+        # 3. Download KPI reali per tutte le stazioni trovate
         station_codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
         kpi_map_result = {}
         
         if station_codes:
             kpi_url = f"{HUAWEI_BASE_URL}/getStationRealKpi"
-            # Dividiamo a blocchi di 10 per sicurezza
             res_kpi = session.post(kpi_url, json={"stationCodes": ",".join(station_codes)}, timeout=12)
             kpi_data = res_kpi.json()
             if kpi_data.get("success") and kpi_data.get("data"):
@@ -89,6 +96,7 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
     current_hour = now_italy.hour
     current_minute = now_italy.minute
 
+    # Conversione Azimuth per Open-Meteo (0° = SUD, -90° = EST, 90° = OVEST)
     azimuth_api = azimuth_user
     if azimuth_api > 180:
         azimuth_api -= 360
@@ -110,10 +118,12 @@ def get_expected_production_now(lat, lon, tilt, azimuth_user, kwp, pr=0.85):
             hourly_tilted = data.get("hourly", {}).get("global_tilted_irradiance", [])
 
             if hourly_tilted:
+                # Ore intere trascorse fino alle ore precedenti
                 for h in range(min(current_hour, len(hourly_tilted))):
                     if hourly_tilted[h] is not None:
                         cumulative_poa_wh += float(hourly_tilted[h])
 
+                # Minuti trascorsi dell'ora corrente
                 if current_hour < len(hourly_tilted) and hourly_tilted[current_hour] is not None:
                     current_instant_w = float(hourly_tilted[current_hour])
                     cumulative_poa_wh += current_instant_w * (current_minute / 60.0)
@@ -137,7 +147,7 @@ st.sidebar.header("⚙️ Impostazioni Globali")
 performance_ratio = st.sidebar.slider("Performance Ratio (PR)", min_value=0.70, max_value=0.95, value=0.85, step=0.01)
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"👤 Utente API caricato dai Secrets: **{API_USER}**")
+st.sidebar.info(f"👤 Utente API dai Secrets: **{API_USER}**")
 
 # ==========================================
 # 6. DASHBOARD PRINCIPALE
@@ -146,7 +156,7 @@ btn_fetch = st.button("🔄 Aggiorna Dati In Tempo Reale", type="primary")
 
 if btn_fetch:
     if not API_PASS:
-        st.error("Inserisci la password dell'utente API nei Secrets per procedere.")
+        st.error("Inserisci la password nei Secrets per procedere.")
     else:
         with st.spinner("Autenticazione e recupero dati da Huawei in corso..."):
             huawei_data, err = get_huawei_data(API_USER, API_PASS)
@@ -157,27 +167,27 @@ if btn_fetch:
             st.session_state["huawei_raw"] = huawei_data
             st.success("✅ Dati recuperati con successo da Huawei!")
 
-# Se i dati sono in sessione, mostriamo la tabella configurabile
+# Se i dati sono stati recuperati, mostriamo le tabelle
 if "huawei_raw" in st.session_state:
     huawei_raw = st.session_state["huawei_raw"]
     stations = huawei_raw["stations"]
     kpi_map = huawei_raw["kpi_map"]
 
     now_str = datetime.datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y - %H:%M:%S")
-    st.caption(f"🕒 Ultimo aggiornamento: **{now_str}** | Trovati **{len(stations)}** impianti.")
+    st.caption(f"🕒 Ultimo aggiornamento: **{now_str}** | Trovati **{len(stations)}** impianti reali.")
 
-    # Inizializziamo/Recuperiamo le configurazioni personalizzate di Tilt e Azimuth per impianto
+    # Inizializziamo il dizionario di configurazione se non esiste
     if "plant_configs" not in st.session_state:
         st.session_state["plant_configs"] = {}
 
-    # Costruiamo il dataframe base per l'editing
+    # Costruiamo il dataframe per consentire l'editing di Tilt e Azimuth
     config_rows = []
     for s in stations:
         code = s.get("stationCode")
         name = s.get("stationName")
         kwp = float(s.get("capacity", 0.0))
         
-        # Configurazione Salvata o Default (Tilt=15°, Azimuth=0°)
+        # Recupera valore salvato oppure imposta il default (Tilt=15°, Azimuth=0°)
         cfg = st.session_state["plant_configs"].get(code, {"Tilt": 15, "Azimuth": 0})
         
         config_rows.append({
@@ -191,9 +201,9 @@ if "huawei_raw" in st.session_state:
     df_config_input = pd.DataFrame(config_rows)
 
     st.markdown("### 🛠️ Personalizza Inclinazione (Tilt) e Orientamento (Azimuth)")
-    st.info("💡 **Modifica i valori di Tilt e Azimuth direttamente nella tabella sottostante** e clicca su **Ricalcola Produzione Attesa**.")
+    st.info("💡 Puoi modificare i valori di **Tilt** e **Azimuth** per ciascun impianto direttamente nella tabella qui sotto:")
 
-    # TABELLA EDITABILE PER TILT E AZIMUTH SINGOLO IMPIANTO
+    # TABELLA EDITABILE PER TILT E AZIMUTH
     edited_df = st.data_editor(
         df_config_input,
         column_config={
@@ -214,7 +224,7 @@ if "huawei_raw" in st.session_state:
             "Azimuth": int(row["Azimuth (°)"])
         }
 
-    # RICALCOLO CON I PARAMETRI SPECIFICI PER IMPIANTO
+    # ELABORAZIONE RISULTATI FINALI
     results = []
     for s in stations:
         code = s.get("stationCode")
@@ -223,17 +233,17 @@ if "huawei_raw" in st.session_state:
         lat = float(s.get("latitude")) if s.get("latitude") else 46.06
         lon = float(s.get("longitude")) if s.get("longitude") else 13.23
 
-        # Lettura Tilt e Azimuth personalizzati
+        # Legge la configurazione personalizzata dell'impianto
         p_cfg = st.session_state["plant_configs"][code]
         tilt = p_cfg["Tilt"]
         azimuth = p_cfg["Azimuth"]
 
-        # KPI Huawei Reali
+        # KPI Reali Huawei
         plant_kpi = kpi_map.get(code, {})
         real_kwh = float(plant_kpi.get("day_power", 0.0))
         active_kw = float(plant_kpi.get("active_power", 0.0))
 
-        # Calcolo Meteo Atteso specifico
+        # Calcolo Meteo Atteso specifico per l'impianto
         meteo = get_expected_production_now(
             lat=lat,
             lon=lon,
@@ -278,11 +288,11 @@ if "huawei_raw" in st.session_state:
     # --- TABELLA DETTAGLIATA ---
     def color_performance(val):
         if val >= 95.0:
-            color = '#d4edda'
+            color = '#d4edda' # Verde
         elif val >= 80.0:
-            color = '#fff3cd'
+            color = '#fff3cd' # Giallo
         else:
-            color = '#f8d7da'
+            color = '#f8d7da' # Rosso
         return f'background-color: {color}'
 
     styled_df = df_res.style.map(color_performance, subset=['Performance (%)'])\
