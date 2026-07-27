@@ -23,6 +23,7 @@ HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_huawei_stations(username, password):
+    # Usiamo una Session per mantenere automatici i Cookie di CloudWAF
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
 
@@ -35,19 +36,21 @@ def get_huawei_stations(username, password):
         if res_login.status_code != 200:
             return None, f"Errore HTTP Login: {res_login.status_code}"
 
-        # Cerca il token provando sia gli header (case-insensitive) che i cookie
+        # Estraiamo il token da xsrf-token / XSRF-TOKEN
         headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
         token = (
             headers_lower.get("xsrf-token")
-            or headers_lower.get("x-srt")
             or session.cookies.get("XSRF-TOKEN")
         )
 
         if not token:
             return None, "Impossibile estrarre il token dalla risposta di Login."
 
-        # Imposta l'header necessario per Huawei/CloudWAF
-        session.headers.update({"X-XSRF-TOKEN": token})
+        # PER L'API HUAWEI IL TOKEN VA PASSATO COME 'X-SRT' (o 'xsrt')
+        session.headers.update({
+            "X-SRT": token,
+            "xsrt": token
+        })
 
         # 2. RECUPERO LISTA STAZIONI
         res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
