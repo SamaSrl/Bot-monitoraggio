@@ -1,4 +1,3 @@
 streamlit
+pandas
 requests
-fpdf
-requests>=2.28.0
