@@ -1,8 +1,13 @@
-Ora ci siamo! Invece di far inserire le coordinate a mano una alla volta, colleghiamo la sezione meteo direttamente alla tabella degli impianti.
+Ci è cascata di nuovo la prima riga di spiegazione nel file Python! 😅
 
-Così facendo, quando premi il pulsante, lo script legge tutti gli impianti presenti nella tabella con le rispettive latitudini e longitudini e mostra una comoda lista (o griglia) con il meteo aggiornato di ciascun sito!
+Nel file src/app.py è finita la frase "Ora ci siamo! Invece di far inserire..." prima del codice, scatenando il SyntaxError.
 
-Ecco il codice completo aggiornato per src/app.py:
+🛠️ Soluzione Rapida
+Apri src/app.py su GitHub.
+
+Svuota completamente il file.
+
+Incolla solo il blocco di codice qui sotto (controlla che la prima riga sia import streamlit as st):
 
 Python
 import streamlit as st
@@ -101,7 +106,7 @@ if st.button("🌦️ Aggiorna Meteo per Tutti gli Impianti", type="secondary"):
     with st.spinner("Scaricamento dati meteo per tutti gli impianti..."):
         weather_list = []
         
-        # Ciclo su tutte le righe della tabella modificata dall'utente
+        # Ciclo su tutte le righe della tabella
         for idx, row in edited_df.iterrows():
             nome = row['Nome Impianto']
             lat = row['Latitudine']
@@ -127,7 +132,7 @@ if st.button("🌦️ Aggiorna Meteo per Tutti gli Impianti", type="secondary"):
                     "Velocità Vento": "N/D"
                 })
         
-        # Mostra i risultati sotto forma di tabella pulita
+        # Mostra la tabella con i dati meteo
         res_df = pd.DataFrame(weather_list)
         st.dataframe(res_df, use_container_width=True, hide_index=True)
 
