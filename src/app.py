@@ -42,6 +42,10 @@ HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_huawei_data_cached(username, password):
+    """
+    Effettua Login + List + RealKpi in un unico blocco.
+    Risultati memorizzati in cache per 15 minuti (900s) per rispettare i limiti Huawei.
+    """
     session = requests.Session()
     headers = {"Content-Type": "application/json"}
 
@@ -63,25 +67,28 @@ def fetch_huawei_data_cached(username, password):
                 return None, "⏳ Limitazione frequenza Huawei attiva (max 5 login in 10 min). Attendi 10 minuti prima di riprovare."
             return None, f"Login fallito: {msg} (failCode: {fail_code})"
 
-        # Ricerca capillare del Token X-SRT negli header (case-insensitive) o nei cookies
-        token = None
-        for k, v in res_login.headers.items():
-            if k.lower() == "x-srt":
-                token = v
-                break
-
-        # Se non c'è negli header, cerchiamo tra i cookie di sessione
-        if not token and "JSESSIONID" in session.cookies:
-            token = session.cookies.get("JSESSIONID")
+        # Estragga il token provando TUTTI i possibili nomi restituiti da Huawei/CloudWAF
+        headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
+        
+        token = (
+            headers_lower.get("xsrf-token")
+            or headers_lower.get("x-srt")
+            or headers_lower.get("xsrt")
+            or headers_lower.get("accesssession")
+            or session.cookies.get("XSRF-TOKEN")
+            or session.cookies.get("JSESSIONID")
+        )
 
         if not token:
-            # Mostra gli header ricevuti per debugging preciso
-            return None, f"Token non trovato. Header ricevuti da Huawei: {dict(res_login.headers)}"
+            return None, f"Token non trovato negli header o nei cookie. Header ricevuti: {dict(res_login.headers)}"
 
-        # Assegna il token per le chiamate successive
+        # Assegna il token a TUTTI gli header che Huawei potrebbe aspettarsi
         session.headers.update({
-            "X-SRT": token, 
+            "X-SRT": token,
             "xsrt": token,
+            "X-XSRF-TOKEN": token,
+            "xsrf-token": token,
+            "accessSession": token,
             "Content-Type": "application/json"
         })
 
