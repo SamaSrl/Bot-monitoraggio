@@ -33,9 +33,9 @@ def get_huawei_stations(username, password):
     try:
         res_login = session.post(login_url, json=login_payload, timeout=12)
         if res_login.status_code != 200:
-            return None, f"Errore HTTP Login: {res_login.status_code}"
+            return None, f"Errore HTTP Login: {res_login.status_code}", None
 
-        # Estrazione del token esatto dagli header/cookie
+        # Estrazione del token dagli header/cookie
         headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
         token = (
             headers_lower.get("xsrf-token")
@@ -43,26 +43,36 @@ def get_huawei_stations(username, password):
         )
 
         if not token:
-            return None, "Impossibile estrarre il token dalla risposta di Login."
+            return None, "Impossibile estrarre il token dalla risposta di Login.", None
 
-        # Impostazione dell'header comunicato dal server (accessSession)
+        # Passiamo l'accessSession e gli header correlati
         session.headers.update({
             "accessSession": token,
-            "xsrf-token": token
+            "xsrf-token": token,
+            "X-SRT": token
         })
 
-        # 2. RECUPERO LISTA STAZIONI
-        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
+        # 2. RECUPERO LISTA STAZIONI (Con paginazione obbligatoria)
+        # L'API OpenAPI richiede pageNo
+        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={"pageNo": 1}, timeout=12)
         data_list = res_list.json()
 
-        if not data_list.get("success"):
-            return None, f"Errore API Stazioni: {data_list.get('message')} (Code: {data_list.get('failCode')})"
+        # Estrazione stazioni o dati
+        stations = []
+        if isinstance(data_list.get("data"), list):
+            stations = data_list.get("data")
+        elif isinstance(data_list.get("data"), dict):
+            stations = data_list.get("data", {}).get("list", [])
 
-        stations = data_list.get("data", [])
-        return stations, None
+        if not data_list.get("success") and not stations:
+            msg = data_list.get("message") or "Risposta senza campo success"
+            code = data_list.get("failCode", "N/D")
+            return None, f"Errore API Stazioni: {msg} (Code: {code})", data_list
+
+        return stations, None, data_list
 
     except Exception as e:
-        return None, f"Errore di connessione: {e}"
+        return None, f"Errore di connessione: {e}", None
 
 
 # TEST ED ESECUZIONE
@@ -71,11 +81,14 @@ if API_PASS:
         st.cache_data.clear()
 
     with st.spinner("Autenticazione e recupero impianti in corso..."):
-        stations, err = get_huawei_stations(API_USER, API_PASS)
+        stations, err, raw_json = get_huawei_stations(API_USER, API_PASS)
 
     if err:
         st.error(f"⚠️ {err}")
-    elif stations:
+        if raw_json:
+            st.markdown("**Risposta RAW ricevuta da Huawei:**")
+            st.json(raw_json)
+    elif stations is not None:
         st.success(f"🎉 Connessione riuscita! Trovati **{len(stations)}** impianti.")
         
         # Mostra la tabella degli impianti
