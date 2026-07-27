@@ -42,10 +42,6 @@ HUAWEI_BASE_URL = "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_huawei_data_cached(username, password):
-    """
-    Effettua Login + List + RealKpi in un unico blocco.
-    Risultati memorizzati in cache per 15 minuti (900s) per rispettare i limiti Huawei.
-    """
     session = requests.Session()
     headers = {"Content-Type": "application/json"}
 
@@ -55,6 +51,7 @@ def fetch_huawei_data_cached(username, password):
 
     try:
         res_login = session.post(login_url, json=login_payload, headers=headers, timeout=12)
+        
         if res_login.status_code != 200:
             return None, f"Errore HTTP Login: {res_login.status_code}"
 
@@ -64,31 +61,46 @@ def fetch_huawei_data_cached(username, password):
             fail_code = data_login.get("failCode")
             if fail_code in [407, 20002] or "frequency" in str(msg).lower():
                 return None, "⏳ Limitazione frequenza Huawei attiva (max 5 login in 10 min). Attendi 10 minuti prima di riprovare."
-            return None, f"Login fallito: {msg} (code: {fail_code})"
+            return None, f"Login fallito: {msg} (failCode: {fail_code})"
 
-        token = res_login.headers.get("X-SRT") or res_login.headers.get("xsrt")
+        # Ricerca capillare del Token X-SRT negli header (case-insensitive) o nei cookies
+        token = None
+        for k, v in res_login.headers.items():
+            if k.lower() == "x-srt":
+                token = v
+                break
+
+        # Se non c'è negli header, cerchiamo tra i cookie di sessione
+        if not token and "JSESSIONID" in session.cookies:
+            token = session.cookies.get("JSESSIONID")
+
         if not token:
-            return None, "Token X-SRT non restituito dal server Huawei."
+            # Mostra gli header ricevuti per debugging preciso
+            return None, f"Token non trovato. Header ricevuti da Huawei: {dict(res_login.headers)}"
 
-        session.headers.update({"X-SRT": token, "Content-Type": "application/json"})
+        # Assegna il token per le chiamate successive
+        session.headers.update({
+            "X-SRT": token, 
+            "xsrt": token,
+            "Content-Type": "application/json"
+        })
 
         # 2. LISTA STAZIONI
         res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
         data_list = res_list.json()
 
         if not data_list.get("success"):
-            return None, f"Errore recupero stazioni: {data_list.get('message')}"
+            return None, f"Errore recupero stazioni: {data_list.get('message')} (failCode: {data_list.get('failCode')})"
 
         stations = data_list.get("data", [])
         if not stations:
-            return None, "Nessun impianto trovato nel tuo account Huawei."
+            return None, "Nessun impianto associato a questo account API Huawei."
 
         # 3. REAL KPI STAZIONI
         station_codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
         kpi_map = {}
 
         if station_codes:
-            # Huawei supporta max 100 stazioni per chiamata
             res_kpi = session.post(
                 f"{HUAWEI_BASE_URL}/getStationRealKpi",
                 json={"stationCodes": ",".join(station_codes[:100])},
@@ -171,7 +183,6 @@ col_btn1, col_btn2 = st.columns([1, 4])
 with col_btn1:
     btn_fetch = st.button("🔄 Aggiorna Dati In Tempo Reale", type="primary")
 
-# Se l'utente clicca "Aggiorna", svuotiamo la cache per forzare un nuovo download
 if btn_fetch:
     st.cache_data.clear()
 
@@ -184,7 +195,7 @@ if API_PASS:
     elif huawei_data:
         st.session_state["huawei_raw"] = huawei_data
 
-# RENDERING DELLA DASHBOARD
+# RENDERING DASHBOARD
 if "huawei_raw" in st.session_state and st.session_state["huawei_raw"]:
     huawei_raw = st.session_state["huawei_raw"]
     stations = huawei_raw["stations"]
