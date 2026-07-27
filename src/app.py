@@ -29,21 +29,22 @@ def get_secret_credentials():
 def get_fusionsolar_token(username, password):
     """
     Richiede il token di sessione X-SRT all'API Huawei FusionSolar Northbound API.
-    I gateway API ufficiali europei sono uni001eu5 e region01eu5.
+    Le API Huawei Northbound utilizzano la porta 27200 sui gateway dedicati.
     """
     if not username or not password:
         return None, None, "Username o Password mancanti nei Secrets di Streamlit."
 
-    # Hashing MD5 della password se non è già a 32 caratteri
+    # Hashing MD5 della password se non è già formattata a 32 caratteri
     if len(str(password)) != 32:
         system_code = hashlib.md5(str(password).encode('utf-8')).hexdigest()
     else:
         system_code = str(password)
 
-    # Server Gateway dedicati alle API Huawei FusionSolar in Europa
+    # Gateway API ufficiali Huawei FusionSolar con porta 27200
     api_hosts = [
-        "https://uni001eu5.fusionsolar.huawei.com",
-        "https://region01eu5.fusionsolar.huawei.com"
+        "https://uni001eu5.fusionsolar.huawei.com:27200",
+        "https://region01eu5.fusionsolar.huawei.com:27200",
+        "https://eu5.fusionsolar.huawei.com"
     ]
 
     payload = {
@@ -59,18 +60,21 @@ def get_fusionsolar_token(username, password):
         try:
             res = requests.post(url, json=payload, headers=headers, timeout=10)
             if res.status_code == 200:
-                data = res.json()
-                if data.get("success"):
-                    token = res.headers.get("X-SRT") or data.get("data")
-                    return token, base_url, None
-                else:
-                    fail_code = data.get("failCode", "N/D")
-                    message = data.get("message", "Credenziali o SystemCode errati")
-                    error_logs.append(f"{base_url} -> Codice {fail_code}: {message}")
+                try:
+                    data = res.json()
+                    if data.get("success"):
+                        token = res.headers.get("X-SRT") or data.get("data")
+                        return token, base_url, None
+                    else:
+                        fail_code = data.get("failCode", "N/D")
+                        message = data.get("message", "Credenziali o SystemCode errati")
+                        error_logs.append(f"{base_url} -> Codice {fail_code}: {message}")
+                except ValueError:
+                    error_logs.append(f"{base_url} -> Risposta non-JSON ricevuta")
             else:
                 error_logs.append(f"{base_url} -> HTTP Status {res.status_code}")
         except requests.exceptions.RequestException as e:
-            error_logs.append(f"{base_url} -> Errore Connessione/DNS: {str(e)}")
+            error_logs.append(f"{base_url} -> Errore Connessione: {str(e)}")
 
     return None, None, " | ".join(error_logs)
 
