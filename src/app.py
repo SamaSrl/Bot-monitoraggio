@@ -1,12 +1,9 @@
 import streamlit as st
-import pandas as pd
 import requests
 
-# Configurazione Pagina
-st.set_page_config(page_title="FusionSolar - Step 1", page_icon="☀️", layout="wide")
-st.title("☀️ FusionSolar - Step 1: Login & Lista Impianti")
+st.set_page_config(page_title="FusionSolar - Ispezione Lista Stazioni", page_icon="🔍")
+st.title("🔍 Ispezione Risposta Stazioni")
 
-# Recupero Credenziali
 API_USER = (
     st.secrets.get("huawei", {}).get("username")
     or st.secrets.get("username")
@@ -21,89 +18,39 @@ API_PASS = (
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-@st.cache_data(ttl=900, show_spinner=False)
-def get_huawei_stations(username, password):
+if st.button("🚀 Leggi Risposta RAW Lista Stazioni", type="primary"):
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
 
     # 1. LOGIN
     login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
-    login_payload = {"username": username, "password": password}
+    login_payload = {"username": API_USER, "password": API_PASS}
 
-    try:
-        res_login = session.post(login_url, json=login_payload, timeout=12)
-        if res_login.status_code != 200:
-            return None, f"Errore HTTP Login: {res_login.status_code}", None
+    res_login = session.post(login_url, json=login_payload, timeout=12)
+    
+    headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
+    token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
 
-        # Estrazione token
-        headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-        token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
+    session.headers.update({
+        "accessSession": token,
+        "xsrf-token": token,
+        "X-SRT": token
+    })
 
-        if not token:
-            return None, "Impossibile estrarre il token dalla risposta di Login.", None
+    # 2. CHIAMATA AGLI ENDPOINT
+    endpoints = [
+        f"{BASE_DOMAIN}/thirdparty/station/list",
+        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
+    ]
 
-        # Header sessione per Huawei
-        session.headers.update({
-            "accessSession": token,
-            "xsrf-token": token,
-            "X-SRT": token
-        })
-
-        # Lista degli endpoint ufficiali da provare in sequenza
-        endpoints_to_try = [
-            f"{BASE_DOMAIN}/thirdparty/station/list",
-            f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
-        ]
-
-        data_list = {}
-        for ep in endpoints_to_try:
-            res_list = session.post(ep, json={"pageNo": 1}, timeout=12)
-            if res_list.status_code == 200:
-                try:
-                    data = res_list.json()
-                    # Se non risponde con errore di rotta non trovata, lo usiamo
-                    if data.get("error_code") != "APIG.0101":
-                        data_list = data
-                        break
-                except Exception:
-                    continue
-
-        # Estrazione stazioni
-        stations = []
-        if isinstance(data_list.get("data"), list):
-            stations = data_list.get("data")
-        elif isinstance(data_list.get("data"), dict):
-            stations = data_list.get("data", {}).get("list", [])
-
-        if not data_list.get("success") and not stations:
-            msg = data_list.get("message") or data_list.get("error_msg") or "Risposta senza campo success"
-            code = data_list.get("failCode") or data_list.get("error_code") or "N/D"
-            return None, f"Errore API Stazioni: {msg} (Code: {code})", data_list
-
-        return stations, None, data_list
-
-    except Exception as e:
-        return None, f"Errore di connessione: {e}", None
-
-
-# TEST ED ESECUZIONE
-if API_PASS:
-    if st.button("🔄 Connetti e Carica Impianti", type="primary"):
-        st.cache_data.clear()
-
-    with st.spinner("Autenticazione e recupero impianti in corso..."):
-        stations, err, raw_json = get_huawei_stations(API_USER, API_PASS)
-
-    if err:
-        st.error(f"⚠️ {err}")
-        if raw_json:
-            st.markdown("**Risposta RAW ricevuta da Huawei:**")
-            st.json(raw_json)
-    elif stations is not None:
-        st.success(f"🎉 Connessione riuscita! Trovati **{len(stations)}** impianti.")
-        
-        # Mostra la tabella degli impianti
-        df_stations = pd.DataFrame(stations)
-        st.dataframe(df_stations, use_container_width=True)
-else:
-    st.error("⚠️ Password non trovata nei Secrets.")
+    for ep in endpoints:
+        st.write(f"--- \n### Prova su Endpoint: `{ep}`")
+        try:
+            res = session.post(ep, json={"pageNo": 1, "pageSize": 100}, timeout=12)
+            st.write(f"**Status Code:** {res.status_code}")
+            try:
+                st.json(res.json())
+            except Exception:
+                st.text(res.text)
+        except Exception as e:
+            st.error(f"Errore nella chiamata: {e}")
