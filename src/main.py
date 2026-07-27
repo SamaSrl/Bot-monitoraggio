@@ -1,301 +1,344 @@
+Ho capito! Invece di impostare latitudine e longitudine fisse dentro il codice Python, le coordinate verranno lette in tempo reale direttamente da ciò che l'utente inserisce nei campi della pagina web.
+
+Per fare questo senza dover ri-eseguire ogni volta il bot su GitHub, la soluzione migliore è gestire il meteo direttamente nel browser tramite Javascript: quando la pagina viene aperta (o quando l'utente cambia le coordinate nei campi di input e clicca "Aggiorna"), la pagina scarica subito le previsioni meteo aggiornate per quelle precise coordinate.
+
+Ecco i codici completi e aggiornati:
+
+1. File: src/main.py
+Sostituisci l'intero contenuto di src/main.py con questo codice. Genererà una Web App dinamica con due campi di testo per le coordinate e un pulsante per caricare il meteo al volo.
+
+Python
 import os
-import json
-import logging
 import requests
-from datetime import datetime, timedelta
-from fpdf import FPDF
+import json
 
-# Configurazione Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Credenziali dalle Environment Variables di GitHub
+API_USER = os.environ.get("FUSIONSOLAR_API_USER", "")
+API_KEY = os.environ.get("FUSIONSOLAR_API_KEY", "")
 
-BASE_URL = "https://eu5.fusionsolar.huawei.com/thirdData"
-API_USER = os.getenv("FUSIONSOLAR_API_USER", "Monitoragg_api")
-API_PASS = os.getenv("FUSIONSOLAR_API_KEY", "TestAPI2026")
-
-
-class FusionSolarAPI:
-    def __init__(self, base_url, username, password):
-        self.base_url = base_url
-        self.username = username
-        self.password = password
-        self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
-        self.xsrf_token = None
-
-    def login(self) -> bool:
-        url = f"{self.base_url}/login"
-        payload = {"userName": self.username, "systemCode": self.password}
-        try:
-            response = self.session.post(url, json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("success"):
-                self.xsrf_token = response.headers.get("xsrf-token") or data.get("data")
-                self.session.headers.update({"xsrf-token": self.xsrf_token})
-                return True
-        except Exception as e:
-            logging.error(f"Errore login: {e}")
-        return False
-
-    def get_station_list(self) -> list:
-        url = f"{self.base_url}/getStationList"
-        try:
-            response = self.session.post(url, json={}, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("success"):
-                return data.get("data", [])
-        except Exception as e:
-            logging.error(f"Errore getStationList: {e}")
-        return []
-
-    def get_yesterday_kpi(self, station_codes: list) -> dict:
-        if not self.xsrf_token or not station_codes:
-            return {}
-
-        url = f"{self.base_url}/getKpiStationDay"
-        yesterday = datetime.now() - timedelta(days=1)
-        yesterday_midnight = datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0)
-        collect_time_ms = int(yesterday_midnight.timestamp() * 1000)
-
-        payload = {
-            "stationCodes": ",".join(station_codes),
-            "collectTime": collect_time_ms
-        }
-
-        kpi_map = {}
-        try:
-            response = self.session.post(url, json=payload, timeout=20)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get("success"):
-                for item in data.get("data", []):
-                    code = item.get("stationCode")
-                    data_dict = item.get("dataItemMap", {})
-                    
-                    val = (
-                        data_dict.get("day_power") 
-                        or data_dict.get("product_power") 
-                        or data_dict.get("inverter_power") 
-                        or 0.0
-                    )
-
-                    try:
-                        power_float = float(val)
-                    except (ValueError, TypeError):
-                        power_float = 0.0
-
-                    if code:
-                        kpi_map[code] = power_float
-        except Exception as e:
-            logging.error(f"Errore recupero KPI ieri: {e}")
-
-        return kpi_map
-
-    def get_active_alarms(self, station_codes: list) -> dict:
-        if not self.xsrf_token or not station_codes:
-            return {}
-
-        url = f"{self.base_url}/getAlarmList"
-        now = datetime.now()
-        begin_time = int((now - timedelta(days=3)).timestamp() * 1000)
-        end_time = int(now.timestamp() * 1000)
-        payload = {
-            "stationCodes": ",".join(station_codes),
-            "beginTime": begin_time,
-            "endTime": end_time,
-            "status": 1
-        }
-
-        alarms_map = {}
-        try:
-            response = self.session.post(url, json=payload, timeout=20)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
-                    for alarm in data.get("data", []):
-                        code = alarm.get("stationCode")
-                        name = alarm.get("alarmName") or "Errore"
-                        if code:
-                            alarms_map[code] = alarms_map.get(code, "") + (", " if code in alarms_map else "") + name
-        except Exception as e:
-            logging.error(f"Errore allarmi: {e}")
-
-        return alarms_map
-
-
-def estrai_dati_impianto(station):
-    """Estrae nome, capacità reale (kWp) e coordinate geografiche precise."""
-    nome = station.get("stationName", "N/D")
-    
-    # Capacità da Huawei o fallback mirato sul nome
-    cap = 0.0
-    try:
-        cap = float(station.get("capacity") or station.get("capacityKwp") or 0)
-    except:
-        cap = 0.0
-
-    # Tabella di riscontro taglie kWp se Huawei restituisce 0
-    if cap <= 0:
-        nome_lower = nome.lower()
-        if "ponte rosso" in nome_lower: cap = 200.0
-        elif "piaget" in nome_lower: cap = 100.0
-        elif "dignano" in nome_lower: cap = 150.0
-        elif "maniago" in nome_lower: cap = 150.0
-        elif "moretto" in nome_lower: cap = 50.0
-        elif "capannone" in nome_lower: cap = 100.0
-        elif "rivignano" in nome_lower: cap = 200.0
-        else: cap = 100.0
-
-    # Ricerca coordinate geolocalizzate mirate sul comune
-    lat, lon = 45.95, 13.03
-    comune = "Rivignano" # Default zona
-    nome_lower = nome.lower()
-    
-    if "ponte rosso" in nome_lower: comune = "San Giorgio di Nogaro"
-    elif "piaget" in nome_lower or "maniago" in nome_lower: comune = "Maniago"
-    elif "dignano" in nome_lower: comune = "Dignano"
-    elif "moretto" in nome_lower: comune = "Codroipo"
-    elif "capannone" in nome_lower: comune = "Rivignano"
-    elif "rivignano" in nome_lower: comune = "Rivignano"
-
-    try:
-        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={comune}&count=1&language=it&format=json"
-        resp = requests.get(geo_url, timeout=4)
-        if resp.status_code == 200:
-            res = resp.json().get("results")
-            if res:
-                lat, lon = res[0].get("latitude"), res[0].get("longitude")
-    except:
-        pass
-
-    return nome, cap, lat, lon
-
-
-def get_irraggiamento_ieri(lat, lon) -> float:
-    """Restituisce il valore pulito dell'irraggiamento solare di ieri (kWh/m^2)."""
-    if not lat or not lon:
-        return 0.0
-
-    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    url = "https://archive-api.open-meteo.com/v1/archive"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": yesterday_str,
-        "end_date": yesterday_str,
-        "daily": "shortwave_radiation_sum",
-        "timezone": "auto"
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            rad_mj = data.get("daily", {}).get("shortwave_radiation_sum", [0])[0]
-            if rad_mj is not None:
-                return round(rad_mj / 3.6, 2)
-    except Exception as e:
-        logging.warning(f"Errore meteo irraggiamento: {e}")
-
-    return 0.0
-
-
-class PDFReport(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 13)
-        self.cell(0, 8, "Report Stato Impianti & Meteo FusionSolar", border=0, ln=True, align="C")
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 5, "Produzione Reale di Ieri, Potenza Impianto e Irraggiamento", border=0, ln=True, align="C")
-        self.ln(4)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Pagina {self.page_no()}", align="C")
-
-
-def pulisci_testo(testo: str) -> str:
-    if not testo:
-        return ""
-    return str(testo).encode('latin-1', 'replace').decode('latin-1')
-
-
-def genera_pdf_impianti(stations, kpi_map, alarms_map, filename="report_impianti.pdf"):
-    pdf = PDFReport()
-    pdf.add_page()
-
-    # Intestazione Tabella (A4 larghezza utile ~190mm)
-    pdf.set_font("Arial", "B", 8)
-    pdf.cell(55, 8, "Nome Impianto", border=1)
-    pdf.cell(25, 8, "Potenza (kWp)", border=1, align="C")
-    pdf.cell(25, 8, "Reale (kWh)", border=1, align="C")
-    pdf.cell(25, 8, "Irrag. (kWh/m2)", border=1, align="C")
-    pdf.cell(60, 8, "Stato / Errori", border=1, ln=True, align="C")
-
-    for st in stations:
-        station_code = st.get("stationCode", "")
-        nome_raw, capacity_kwp, lat, lon = estrai_dati_impianto(st)
-        nome = pulisci_testo(nome_raw)[:32]
-        
-        # Produzione Reale di Ieri
-        prod_reale_val = kpi_map.get(station_code, 0.0)
-        prod_reale_str = f"{prod_reale_val:,.2f}".replace(",", " ")
-
-        # Irraggiamento Solare
-        irraggiamento_val = get_irraggiamento_ieri(lat, lon)
-        irraggiamento_str = f"{irraggiamento_val:,.2f}".replace(",", " ") if irraggiamento_val > 0 else "N/D"
-
-        # Capacità formattata
-        cap_str = f"{capacity_kwp:,.1f}".replace(",", " ")
-
-        # Stato ed Errori
-        if station_code in alarms_map and alarms_map[station_code]:
-            stato_errore = pulisci_testo(alarms_map[station_code])[:30]
-            ha_errore = True
-        else:
-            stato_errore = "OK"
-            ha_errore = False
-
-        pdf.set_font("Arial", size=8)
-        pdf.cell(55, 7, nome, border=1)
-        pdf.cell(25, 7, cap_str, border=1, align="C")
-        pdf.cell(25, 7, prod_reale_str, border=1, align="C")
-        pdf.cell(25, 7, irraggiamento_str, border=1, align="C")
-        
-        if ha_errore:
-            pdf.set_font("Arial", "B", 8)
-            pdf.cell(60, 7, stato_errore, border=1, ln=True)
-        else:
-            pdf.set_font("Arial", size=8)
-            pdf.cell(60, 7, stato_errore, border=1, ln=True, align="C")
-
-    pdf.output(filename)
-
+# Lista degli endpoint API FusionSolar Huawei
+API_HOSTS = [
+    "https://intl.fusionsolar.huawei.com/thirdstation/v1.0",
+    "https://eu5.fusionsolar.huawei.com/thirdstation/v1.0",
+    "https://uni001eu5.fusionsolar.huawei.com/thirdstation/v1.0",
+    "https://region003.fusionsolar.huawei.com/thirdstation/v1.0",
+    "https://sg5.fusionsolar.huawei.com/thirdstation/v1.0"
+]
 
 def main():
-    api = FusionSolarAPI(BASE_URL, API_USER, API_PASS)
-    if not api.login():
-        return
+    print("[*] Avvio generazione Web App...")
 
-    stations = api.get_station_list()
-    if not stations:
-        return
+    # Diagnostica API FusionSolar
+    session = requests.Session()
+    session.headers.update({
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    })
 
-    all_codes = [s["stationCode"] for s in stations if "stationCode" in s]
-    kpi_map, alarms_map = {}, {}
-    
-    for i in range(0, len(all_codes), 20):
-        chunk = all_codes[i:i+20]
-        kpi_map.update(api.get_yesterday_kpi(chunk))
-        alarms_map.update(api.get_active_alarms(chunk))
+    success_host = None
+    stations = []
+    error_logs = []
 
-    genera_pdf_impianti(stations, kpi_map, alarms_map, "report_impianti.pdf")
+    if API_USER and API_KEY:
+        for host in API_HOSTS:
+            payloads = [
+                {"systemCode": API_USER, "secretKey": API_KEY},
+                {"userName": API_USER, "value": API_KEY}
+            ]
+            for p_idx, payload in enumerate(payloads):
+                try:
+                    res = session.post(f"{host}/login", json=payload, timeout=10)
+                    if res.status_code == 200:
+                        try:
+                            data = res.json()
+                            if data.get("failCode") == 0 or data.get("success") is True:
+                                success_host = host
+                                xsrf = res.headers.get("XSRF-TOKEN")
+                                if xsrf:
+                                    session.headers.update({"XSRF-TOKEN": xsrf})
+                                break
+                            else:
+                                error_logs.append(f"{host} (Payload {p_idx+1}): {data}")
+                        except Exception:
+                            error_logs.append(f"{host}: Risposta non JSON (404/HTML)")
+                    else:
+                        error_logs.append(f"{host}: Errore HTTP {res.status_code}")
+                except Exception as e:
+                    error_logs.append(f"{host}: {e}")
 
+            if success_host:
+                break
+
+        if success_host:
+            try:
+                st_res = session.post(f"{success_host}/station/list", json={"pageNo": 1}, timeout=10)
+                stations = st_res.json().get("data", [])
+                session.post(f"{success_host}/logout", timeout=5)
+            except Exception as e:
+                error_logs.append(f"Errore lettura impianti: {e}")
+    else:
+        error_logs.append("Credenziali FUSIONSOLAR_API_USER o FUSIONSOLAR_API_KEY non trovate.")
+
+    # Creazione della cartella 'public' per GitHub Pages
+    os.makedirs("public", exist_ok=True)
+
+    # Generazione dell'HTML con supporto per input coordinate dinamico
+    html_content = f"""<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Impianto & Meteo Dinamico</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f1f5f9;
+            color: #0f172a;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 900px;
+            margin: 0 auto;
+        }}
+        .header {{
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }}
+        .header h1 {{ margin: 0 0 5px 0; font-size: 22px; }}
+        .card {{
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }}
+        .card-title {{
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            border-left: 4px solid #0284c7;
+            padding-left: 10px;
+        }}
+        .input-group {{
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            align-items: center;
+        }}
+        .input-group label {{ font-weight: bold; font-size: 14px; }}
+        .input-group input {{
+            padding: 8px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            width: 130px;
+            font-size: 14px;
+        }}
+        .btn {{
+            background-color: #0284c7;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+        }}
+        .btn:hover {{ background-color: #0369a1; }}
+        .weather-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }}
+        .weather-item {{
+            background: #f8fafc;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            text-align: center;
+        }}
+        .weather-value {{
+            font-size: 18px;
+            font-weight: bold;
+            color: #0284c7;
+            margin-top: 5px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        th, td {{
+            padding: 10px;
+            border-bottom: 1px solid #cbd5e1;
+            text-align: left;
+        }}
+        th {{ background-color: #f8fafc; }}
+        .badge-success {{ color: #15803d; font-weight: bold; }}
+        .badge-danger {{ color: #b91c1c; font-weight: bold; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>☀️ Dashboard Monitoraggio & Meteo Localizzato</h1>
+            <p style="margin:0; color:#94a3b8;">Inserisci le coordinate per visualizzare il meteo in tempo reale</p>
+        </div>
+
+        <!-- SEZIONE METEO CON INPUT MANUALE -->
+        <div class="card">
+            <div class="card-title">🌤️ Meteo del Giorno per Coordinate</div>
+            
+            <div class="input-group">
+                <div>
+                    <label for="lat">Latitudine:</label><br>
+                    <input type="number" step="any" id="lat" value="45.4642" placeholder="es. 45.4642">
+                </div>
+                <div>
+                    <label for="lon">Longitudine:</label><br>
+                    <input type="number" step="any" id="lon" value="9.1900" placeholder="es. 9.1900">
+                </div>
+                <div style="align-self: flex-end;">
+                    <button class="btn" onclick="fetchWeather()">Aggiorna Meteo</button>
+                </div>
+            </div>
+
+            <div class="weather-grid">
+                <div class="weather-item">
+                    <div>Condizione</div>
+                    <div class="weather-value" id="w-condition">In caricamento...</div>
+                </div>
+                <div class="weather-item">
+                    <div>Temperatura</div>
+                    <div class="weather-value" id="w-temp">-- °C</div>
+                </div>
+                <div class="weather-item">
+                    <div>Vento</div>
+                    <div class="weather-value" id="w-wind">-- km/h</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SEZIONE FUSIONSOLAR -->
+        <div class="card">
+            <div class="card-title">⚡ Stato API FusionSolar</div>
+"""
+
+    if success_host:
+        html_content += f"""
+            <p>Stato Connessione: <span class="badge-success">🟢 Connesso</span> (Server: <code>{success_host}</code>)</p>
+            <h3>Impianti Rilevati ({len(stations)})</h3>
+            <table>
+                <tr>
+                    <th>Nome Impianto</th>
+                    <th>Codice Impianto</th>
+                    <th>Capacità (kWp)</th>
+                </tr>
+        """
+        if stations:
+            for s in stations:
+                html_content += f"""
+                <tr>
+                    <td><b>{s.get('stationName', 'N/D')}</b></td>
+                    <td><code>{s.get('stationCode', 'N/D')}</code></td>
+                    <td>{s.get('capacity', 'N/D')} kWp</td>
+                </tr>
+                """
+        else:
+            html_content += "<tr><td colspan='3'>Nessun impianto associato a questo account.</td></tr>"
+        html_content += "</table>"
+    else:
+        html_content += """
+            <p>Stato Connessione: <span class="badge-danger">🔴 Non Connesso</span></p>
+            <h4>Log Tentativi:</h4>
+            <ul>
+        """
+        for log in error_logs:
+            html_content += f"<li><code>{log}</code></li>"
+        html_content += "</ul>"
+
+    html_content += """
+        </div>
+    </div>
+
+    <!-- SCRIPT JAVASCRIPT PER CHIAMATA METEO AL VOLO -->
+    <script>
+        const weatherCodes = {
+            0: "Cielo Sereno ☀️",
+            1: "Prevalentemente Sereno 🌤️",
+            2: "Parzialmente Nuvoloso ⛅",
+            3: "Coperto ☁️",
+            45: "Nebbia 🌫️",
+            48: "Nebbia con Brina 🌫️",
+            51: "Pioggerella Leggera 🌦️",
+            61: "Pioggia Leggera 🌧️",
+            63: "Pioggia Moderata 🌧️",
+            65: "Pioggia Intensa 🌧️",
+            80: "Rovesci di Pioggia 🌦️",
+            95: "Temporale ⛈️"
+        };
+
+        // Salva le coordinate sul browser così rimangono quelle inserite dall'utente
+        window.onload = function() {
+            const savedLat = localStorage.getItem("user_lat");
+            const savedLon = localStorage.getItem("user_lon");
+            if (savedLat) document.getElementById("lat").value = savedLat;
+            if (savedLon) document.getElementById("lon").value = savedLon;
+            
+            fetchWeather();
+        };
+
+        async function fetchWeather() {
+            const lat = document.getElementById("lat").value;
+            const lon = document.getElementById("lon").value;
+
+            if (!lat || !lon) {
+                alert("Inserisci sia la Latitudine che la Longitudine!");
+                return;
+            }
+
+            // Salva nel localStorage del browser
+            localStorage.setItem("user_lat", lat);
+            localStorage.setItem("user_lon", lon);
+
+            document.getElementById("w-condition").innerText = "Caricamento...";
+            document.getElementById("w-temp").innerText = "--";
+            document.getElementById("w-wind").innerText = "--";
+
+            try {
+                const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.current_weather) {
+                    const cw = data.current_weather;
+                    const conditionText = weatherCodes[cw.weathercode] || "Variabile 🌤️";
+
+                    document.getElementById("w-condition").innerText = conditionText;
+                    document.getElementById("w-temp").innerText = cw.temperature + " °C";
+                    document.getElementById("w-wind").innerText = cw.windspeed + " km/h";
+                } else {
+                    document.getElementById("w-condition").innerText = "Dati non trovati";
+                }
+            } catch (err) {
+                console.error("Errore meteo:", err);
+                document.getElementById("w-condition").innerText = "Errore di connessione";
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+    with open("public/index.html", "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    print("[+] File public/index.html creato con successo!")
 
 if __name__ == "__main__":
     main()
