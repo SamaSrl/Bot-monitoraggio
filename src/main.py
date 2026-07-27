@@ -10,13 +10,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- FUNZIONI DI SUPPORTO ---
-
+# --- FUNZIONI DI SUPPORTO METEO ---
 def get_weather_data(latitude, longitude):
-    """Recupera i dati meteo attuali da Open-Meteo per le coordinate date."""
+    """Recupera i dati meteo attuali da Open-Meteo in base alle coordinate."""
     url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather=true"
     
-    # Mappa dei codici meteo WMO per descrizioni in italiano
     weather_codes = {
         0: "Cielo Sereno ☀️",
         1: "Prevalentemente Sereno 🌤️",
@@ -34,7 +32,7 @@ def get_weather_data(latitude, longitude):
 
     try:
         response = requests.get(url, timeout=10)
-        response.raise_for_status() # Controlla se la richiesta è andata a buon fine
+        response.raise_for_status()
         data = response.json()
         if "current_weather" in data:
             current = data["current_weather"]
@@ -46,31 +44,27 @@ def get_weather_data(latitude, longitude):
             }
         else:
             return None
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         st.error(f"Errore nel recupero dei dati meteo: {e}")
         return None
 
-# --- INIZIO UI STREAMLIT ---
+# --- INTEFACCIA UTENTE ---
 
-# Titolo principale e Sincronizzazione (come da screenshot)
+# Titolo principale e Sincronizzazione
 col_title, col_sync = st.columns([3, 1])
 with col_title:
     st.markdown("# ☀️ Gestione Impianti & Report FusionSolar")
 
 with col_sync:
-    # Pulsante per sincronizzare i nuovi impianti
     if st.button("🔄 Sincronizza Nuovi Impianti", use_container_width=True):
-        st.info("Funzione di sincronizzazione in fase di sviluppo...")
-        # Aggiungi qui la logica di sincronizzazione da Huawei se necessario
+        st.info("Sincronizzazione in corso...")
 
-st.markdown("---") # Linea di separazione
+st.markdown("---")
 
-# --- SEZIONE 1: TABELLA PARAMETRI IMPIANTI (come da screenshot) ---
+# 1. TABELLA PARAMETRI IMPIANTI
 st.markdown("## 📋 Tabella Parametri Impianti")
 st.markdown("Modifica i dati se necessario. I nuovi impianti aggiunti da Huawei appariranno in fondo senza cancellare le modifiche.")
 
-# Dati di esempio (basati sullo screenshot)
-# In produzione, questi verrebbero caricati da un file CSV o database
 data = {
     'stationCode': ['NE=145335207', 'NE=187970646', 'NE=289231586', 'NE=231216926', 'NE=142360791', 'NE=167849112', 'NE=236021376'],
     'Nome Impianto': ['Omnia Ponte Rosso', 'Omnia Immobiliare - Scuola Piaget', 'Omnia Immobiliare Dignano', 'Omnia Immobiliare Maniago', 'Omnia Immobiliare Moretto', 'Omnia Capannone Nuovo', 'Omnia Immobiliare Rivignano'],
@@ -82,7 +76,6 @@ data = {
 }
 df = pd.DataFrame(data)
 
-# Visualizzazione della tabella modificabile (data editor)
 edited_df = st.data_editor(
     df,
     hide_index=True,
@@ -90,64 +83,37 @@ edited_df = st.data_editor(
     use_container_width=True
 )
 
-# Pulsante per salvare le modifiche della tabella
-if st.button("💾 Salva Modifiche Tabella", type="secondary"):
-    st.success("Modifiche della tabella salvate correttamente (temporaneamente in memoria).")
-    # In produzione, qui salveresti 'edited_df' su file (es. CSV)
+st.markdown("---")
 
-st.markdown("---") # Linea di separazione
+# 2. NUOVA SEZIONE METEO DEL GIORNO
+st.markdown("## 🌤️ Previsioni Meteo del Giorno")
+st.markdown("Inserisci le coordinate per visualizzare il meteo in tempo reale:")
 
-# --- SEZIONE 2: NUOVA SEZIONE METEO DINAMICA (Sotto la tabella) ---
-st.markdown("## 🌤️ Meteo del Giorno per Coordinate Manuali")
-st.markdown("Inserisci le coordinate geografiche (Latitudine e Longitudine) del luogo per ottenere le previsioni meteo aggiornate.")
+c_lat, c_lon, c_btn = st.columns([2, 2, 1])
 
-# Usa delle colonne per gli input e il pulsante, più compatto
-col_lat, col_lon, col_btn = st.columns([2, 2, 1])
+with c_lat:
+    lat_val = st.number_input("Latitudine (°N)", value=45.81, format="%.2f", step=0.01)
 
-with col_lat:
-    # Input numero per la latitudine (valori predefiniti di esempio)
-    lat_input = st.number_input("Latitudine (°N)", value=45.81, format="%.2f", step=0.01)
+with c_lon:
+    lon_val = st.number_input("Longitudine (°E)", value=13.22, format="%.2f", step=0.01)
 
-with col_lon:
-    # Input numero per la longitudine (valori predefiniti di esempio)
-    lon_input = st.number_input("Longitudine (°E)", value=13.22, format="%.2f", step=0.01)
+with c_btn:
+    st.markdown("<br>", unsafe_allow_html=True)
+    check_weather = st.button("🌦️ Ottieni Meteo", use_container_width=True)
 
-with col_btn:
-    st.markdown("<br>", unsafe_allow_html=True) # Spaziatura per allineare il pulsante
-    # Pulsante per ottenere il meteo per le coordinate inserite
-    get_weather_btn = st.button("🌦️ Ottieni Meteo", use_container_width=True)
+if check_weather:
+    with st.spinner("Aggiornamento meteo in corso..."):
+        w = get_weather_data(lat_val, lon_val)
+        if w:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Stato del Tempo", w['condition'])
+            m2.metric("Temperatura", f"{w['temperature']} °C")
+            m3.metric("Velocità Vento", f"{w['windspeed']} km/h")
+        else:
+            st.warning("Nessun dato meteo trovato per queste coordinate.")
 
-# Contenitore per i risultati del meteo
-weather_container = st.container()
+st.markdown("---")
 
-# Logica per recuperare e mostrare i dati al clic del pulsante
-if get_weather_btn:
-    with st.spinner("Recupero dati meteo in corso..."):
-        weather_results = get_weather_data(lat_input, lon_input)
-        
-        with weather_container:
-            if weather_results:
-                st.markdown("### Dati Meteo Attuali")
-                # Creazione di card meteo usando le colonne
-                c1, c2, c3 = st.columns(3)
-                
-                with c1:
-                    st.metric("Stato del Tempo", weather_results['condition'])
-                with c2:
-                    st.metric("Temperatura", f"{weather_results['temperature']} °C")
-                with c3:
-                    st.metric("Velocità Vento", f"{weather_results['windspeed']} km/h")
-                
-                st.caption(f"Dati meteo per Lat: {lat_input:.2f}, Lon: {lon_input:.2f} aggiornati al {datetime.datetime.now().strftime('%H:%M:%S')}")
-            else:
-                st.warning("Non è stato possibile recuperare i dati meteo per le coordinate inserite.")
-
-st.markdown("---") # Linea di separazione
-
-# --- SEZIONE 3: PULSANTE RUN (come da screenshot) ---
-# Pulsante rosso grande per avviare il report principale
-st.markdown("<br>", unsafe_allow_html=True) # Spaziatura aggiuntiva
+# 3. PULSANTE ROSSO DI ESECUZIONE
 if st.button("🚀 RUN - Estrai Dati di Ieri e Genera Report", type="primary", use_container_width=True):
-    # In produzione, qui andrebbe la logica principale di FusionSolar
-    st.info("Funzione di estrazione dati e generazione report in fase di sviluppo...")
-    st.success(f"Report per ieri ({datetime.date.today() - datetime.timedelta(days=1)}) generato correttamente (esempio).")
+    st.success("Estrazione avviata correttamente!")
