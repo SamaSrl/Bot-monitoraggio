@@ -1,13 +1,3 @@
-Ho capito! Invece di impostare latitudine e longitudine fisse dentro il codice Python, le coordinate verranno lette in tempo reale direttamente da ciò che l'utente inserisce nei campi della pagina web.
-
-Per fare questo senza dover ri-eseguire ogni volta il bot su GitHub, la soluzione migliore è gestire il meteo direttamente nel browser tramite Javascript: quando la pagina viene aperta (o quando l'utente cambia le coordinate nei campi di input e clicca "Aggiorna"), la pagina scarica subito le previsioni meteo aggiornate per quelle precise coordinate.
-
-Ecco i codici completi e aggiornati:
-
-1. File: src/main.py
-Sostituisci l'intero contenuto di src/main.py con questo codice. Genererà una Web App dinamica con due campi di testo per le coordinate e un pulsante per caricare il meteo al volo.
-
-Python
 import os
 import requests
 import json
@@ -283,7 +273,6 @@ def main():
             95: "Temporale ⛈️"
         };
 
-        // Salva le coordinate sul browser così rimangono quelle inserite dall'utente
         window.onload = function() {
             const savedLat = localStorage.getItem("user_lat");
             const savedLon = localStorage.getItem("user_lon");
@@ -302,7 +291,6 @@ def main():
                 return;
             }
 
-            // Salva nel localStorage del browser
             localStorage.setItem("user_lat", lat);
             localStorage.setItem("user_lon", lon);
 
