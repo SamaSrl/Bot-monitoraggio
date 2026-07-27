@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 # --- CONFIGURAZIONE PAGINA STREAMLIT ---
-# Deve essere la PRIMA chiamata Streamlit del script
+# Deve essere la PRIMA chiamata Streamlit del file
 st.set_page_config(
     page_title="Gestione Impianti & Report FusionSolar",
     page_icon="☀️",
@@ -30,31 +30,31 @@ def get_secret_credentials():
 def get_fusionsolar_token(username, password):
     """
     Richiede il token di sessione X-SRT all'API Huawei FusionSolar.
-    Esegue l'hashing MD5 della password se non è già formattata a 32 caratteri.
+    Converte la password in MD5 (richiesto da Huawei Northbound API).
     """
     if not username or not password:
-        return None, "Username o Password non trovati nei Secrets di Streamlit."
+        return None, "Username o Password mancanti nei Secrets di Streamlit."
 
-    # Hashing MD5 se la password è fornita in chiaro
-    if len(password) != 32:
-        system_code = hashlib.md5(password.encode('utf-8')).hexdigest()
+    # Hashing MD5 se la password non è già un hash a 32 caratteri
+    if len(str(password)) != 32:
+        system_code = hashlib.md5(str(password).encode('utf-8')).hexdigest()
     else:
-        system_code = password
+        system_code = str(password)
 
-    # Endpoints dei cluster europei di FusionSolar
+    # Solo endpoint Europei reali e risolvibili
     endpoints = [
         "https://eu5.fusionsolar.huawei.com/thirdparty/login",
-        "https://region01eu5.fusionsolar.huawei.com/thirdparty/login",
-        "https://intl.fusionsolar.huawei.com/thirdparty/login"
+        "https://uni001eu5.fusionsolar.huawei.com/thirdparty/login",
+        "https://region01eu5.fusionsolar.huawei.com/thirdparty/login"
     ]
 
     payload = {
-        "userName": username,
+        "userName": str(username).strip(),
         "systemCode": system_code
     }
     headers = {"Content-Type": "application/json"}
 
-    last_error = "Errore sconosciuto"
+    last_error = "Nessun server Huawei raggiungibile."
 
     for url in endpoints:
         try:
@@ -67,11 +67,14 @@ def get_fusionsolar_token(username, password):
                 else:
                     fail_code = data.get("failCode", "N/D")
                     message = data.get("message", "Credenziali o SystemCode errati")
-                    last_error = f"Huawei API (Code {fail_code}): {message}"
+                    last_error = f"Risposta Huawei da {url} -> Code {fail_code}: {message}"
+                    # Se il server ha risposto con JSON, il dominio è raggiungibile ma le credenziali non sono valide
+                    break 
             else:
-                last_error = f"HTTP Error {res.status_code} su {url}"
-        except Exception as e:
-            last_error = f"Errore di connessione: {str(e)}"
+                last_error = f"HTTP Status {res.status_code} su {url}"
+        except requests.exceptions.RequestException:
+            # Passa al dominio successivo se questo non risponde/non è raggiungibile
+            continue
 
     return None, last_error
 
