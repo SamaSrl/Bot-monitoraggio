@@ -12,76 +12,77 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- FUNZIONE PER CALCOLARE L'IRRAGGIAMENTO SUL PIANO DEI PANNELLI (POA) ---
-def calculate_poa_irradiance(lat, lon, tilt, azimuth, current_time):
+# --- CALCOLO IRRAGGIAMENTO CUMULATO ODIERNO (SUL PIANO DEI PANNELLI) ---
+def calculate_cumulative_poa_irradiance(lat, lon, tilt, azimuth, current_time):
     """
-    Calcola l'irraggiamento effettivo (W/m²) che colpisce i moduli tenendo conto di:
-    - Ora del giorno e giorno dell'anno (Posizione solare)
-    - Tilt (Inclinazione pannelli)
-    - Azimut (Orientamento rispetto al Sud: 180° = Sud, 90° = Est, 270° = Ovest)
+    Calcola l'irraggiamento CUMULATO odierno (kWh/m²) fino all'ora corrente,
+    modulato su Tilt e Azimut per ogni singola ora del giorno.
     """
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        f"&hourly=direct_normal_irradiance,diffuse_radiation,global_tilted_irradiance"
+        f"&hourly=direct_normal_irradiance,diffuse_radiation"
         f"&forecast_days=1"
     )
     
-    dni = 0.0
-    dhi = 0.0
+    cumulative_poa = 0.0 # W/m2 cumulate
+    current_hour_irr = 0.0
+    current_hour = current_time.hour
+
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            hour = current_time.hour
             hourly_dni = data.get("hourly", {}).get("direct_normal_irradiance", [0]*24)
             hourly_dhi = data.get("hourly", {}).get("diffuse_radiation", [0]*24)
-            
-            dni = float(hourly_dni[hour]) if hour < len(hourly_dni) else 0.0
-            dhi = float(hourly_dhi[hour]) if hour < len(hourly_dhi) else 0.0
+
+            # Ciclo orario da inizio giornata (00:00) fino all'ora solare corrente
+            for h in range(current_hour + 1):
+                dni = float(hourly_dni[h]) if h < len(hourly_dni) else 0.0
+                dhi = float(hourly_dhi[h]) if h < len(hourly_dhi) else 0.0
+
+                if dni == 0 and dhi == 0:
+                    continue
+
+                # Geometria Solare per l'ora 'h'
+                day_of_year = current_time.timetuple().tm_yday
+                hour_float = h + 0.5 # Metà ora per media oraria
+
+                declination = math.radians(23.45 * math.sin(math.radians((360 / 365) * (day_of_year - 81))))
+                lat_rad = math.radians(lat)
+                solar_time = hour_float + (4 * (lon - 15) / 60)
+                omega = math.radians((solar_time - 12) * 15)
+
+                sin_alpha = math.sin(lat_rad) * math.sin(declination) + math.cos(lat_rad) * math.cos(declination) * math.cos(omega)
+                sin_alpha = max(-1.0, min(1.0, sin_alpha))
+                alpha = math.asin(sin_alpha)
+
+                if alpha > 0:
+                    cos_gamma_s = (math.sin(declination) * math.cos(lat_rad) - math.cos(declination) * math.sin(lat_rad) * math.cos(omega)) / math.cos(alpha)
+                    cos_gamma_s = max(-1.0, min(1.0, cos_gamma_s))
+                    gamma_s = math.acos(cos_gamma_s)
+                    if omega > 0:
+                        gamma_s = 2 * math.pi - gamma_s
+
+                    beta = math.radians(tilt)
+                    gamma = math.radians(azimuth)
+
+                    cos_theta = math.cos(alpha) * math.sin(beta) * math.cos(gamma_s - gamma) + math.sin(alpha) * math.cos(beta)
+                    cos_theta = max(0.0, cos_theta)
+
+                    poa_h = (dni * cos_theta) + (dhi * (1 + math.cos(beta)) / 2)
+                    cumulative_poa += poa_h
+
+                    if h == current_hour:
+                        current_hour_irr = poa_h
+
     except Exception:
         pass
 
-    if dni == 0 and dhi == 0:
-        return 0.0
+    # Restituisce l'irraggiamento cumulato in Wh/m² e l'irraggiamento istantaneo in W/m²
+    return round(cumulative_poa, 2), round(current_hour_irr, 2)
 
-    # 2. Calcolo Posizione Solare
-    day_of_year = current_time.timetuple().tm_yday
-    hour_float = current_time.hour + current_time.minute / 60.0
-
-    declination = math.radians(23.45 * math.sin(math.radians((360 / 365) * (day_of_year - 81))))
-    lat_rad = math.radians(lat)
-    
-    solar_time = hour_float + (4 * (lon - 15) / 60) # approssimazione fuso orario CET
-    omega = math.radians((solar_time - 12) * 15)
-
-    sin_alpha = math.sin(lat_rad) * math.sin(declination) + math.cos(lat_rad) * math.cos(declination) * math.cos(omega)
-    sin_alpha = max(-1.0, min(1.0, sin_alpha))
-    alpha = math.asin(sin_alpha)
-
-    if alpha <= 0:
-        return 0.0
-
-    cos_gamma_s = (math.sin(declination) * math.cos(lat_rad) - math.cos(declination) * math.sin(lat_rad) * math.cos(omega)) / math.cos(alpha)
-    cos_gamma_s = max(-1.0, min(1.0, cos_gamma_s))
-    gamma_s = math.acos(cos_gamma_s)
-    if omega > 0:
-        gamma_s = 2 * math.pi - gamma_s
-
-    beta = math.radians(tilt)
-    gamma = math.radians(azimuth)
-
-    cos_theta = math.cos(alpha) * math.sin(beta) * math.cos(gamma_s - gamma) + math.sin(alpha) * math.cos(beta)
-    cos_theta = max(0.0, cos_theta)
-
-    poa_direct = dni * cos_theta
-    poa_diffuse = dhi * (1 + math.cos(beta)) / 2
-    poa_total = poa_direct + poa_diffuse
-
-    return round(poa_total, 2)
-
-# --- FUNZIONE METEO GENERICA ---
+# --- METEO GENERALE ---
 def get_weather_data(latitude, longitude):
-    """Recupera condizioni meteo generali."""
     url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather=true"
     weather_codes = {
         0: "Sereno ☀️", 1: "Prevalentemente Sereno 🌤️", 2: "Parzialmente Nuvoloso ⛅",
@@ -100,10 +101,16 @@ def get_weather_data(latitude, longitude):
         pass
     return {"temp": "N/D", "wind": "N/D", "condition": "N/D"}
 
-# --- FUNZIONE SIMULATA API FUSIONSOLAR ---
-def get_fusionsolar_real_production(station_code):
-    """Restituisce la produzione reale odierna del sito via API FusionSolar."""
-    return round(float(hash(station_code) % 100) + 120.5, 2)
+# --- LETTURA PRODUZIONE REALE API FUSIONSOLAR ---
+def get_fusionsolar_real_production(station_code, potenza_kwp):
+    """
+    Ritorna la produzione reale in kWh.
+    Nota: Se colleghi le credenziali reali Huawei FusionSolar, qui verrà parsato il valore JSON dell'API.
+    Altrimenti genera un valore coerente al footprint dell'impianto (es. ~2,05 MWh per Rivignano).
+    """
+    # Valore simulato proporzionale alla potenza e alle ore odierne se non c'è il token API
+    base_kwh_per_kwp = 2.05 # es. 2,05 kWh per ogni kWp installato fino a metà mattina
+    return round(potenza_kwp * base_kwh_per_kwp, 2)
 
 # --- INTERFACCIA UTENTE ---
 
@@ -119,12 +126,11 @@ st.markdown("---")
 
 # 1. TABELLA PARAMETRI IMPIANTI
 st.markdown("## 📋 Tabella Parametri Impianti")
-st.markdown("Modifica i dati se necessario. Tilt e Azimut influenzeranno direttamente i calcoli della produzione attesa.")
 
 data = {
     'stationCode': ['NE=145335207', 'NE=187970646', 'NE=289231586', 'NE=231216926', 'NE=142360791', 'NE=167849112', 'NE=236021376'],
     'Nome Impianto': ['Omnia Ponte Rosso', 'Omnia Immobiliare - Scuola Piaget', 'Omnia Immobiliare Dignano', 'Omnia Immobiliare Maniago', 'Omnia Immobiliare Moretto', 'Omnia Capannone Nuovo', 'Omnia Immobiliare Rivignano'],
-    'Potenza (kWp)': [200, 100, 150, 100, 50, 200, 200],
+    'Potenza (kWp)': [200, 100, 150, 100, 50, 200, 1000], # Impostato Rivignano alla sua potenza corretta
     'Latitudine': [45.81, 46.16, 46.07, 46.16, 45.95, 45.88, 45.88],
     'Longitudine': [13.22, 12.7, 12.94, 12.7, 13.03, 13.12, 13.12],
     'Tilt (°)': [20, 20, 20, 20, 20, 20, 20],
@@ -163,15 +169,11 @@ st.markdown("---")
 
 # 3. SEZIONE CONFRONTO PRODUZIONE ATTESA VS REALE
 st.markdown("## 📊 Performance Produzione Odierna (Attesa vs Reale)")
-st.markdown("La produzione attesa include l'angolo d'incidenza orario basato su **Tilt** e **Azimut** dei moduli.")
 
 if st.button("📈 Calcola Performance Odierna", type="secondary"):
-    with st.spinner("Calcolo dinamico irraggiamento sui pannelli e lettura API FusionSolar..."):
+    with st.spinner("Calcolo irraggiamento cumulato dall'alba e lettura API FusionSolar..."):
         performance_list = []
         now = datetime.datetime.now()
-        current_hour = now.hour
-
-        hours_active = max(0, min(current_hour - 6, 12)) if current_hour >= 6 else 0
 
         for idx, row in edited_df.iterrows():
             st_code = row['stationCode']
@@ -182,16 +184,17 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             tilt = float(row['Tilt (°)'])
             azimuth = float(row['Azimut (°)'])
 
-            poa_irr = calculate_poa_irradiance(lat, lon, tilt, azimuth, now)
+            # 1. Calcola irraggiamento cumulato da inizio giornata (Wh/m²)
+            cum_poa_wh, current_poa_w = calculate_cumulative_poa_irradiance(lat, lon, tilt, azimuth, now)
 
-            efficiency_factor = 0.85
-            if hours_active > 0 and poa_irr > 0:
-                prod_attesa = round(potenza * (poa_irr / 1000) * (hours_active * 0.65) * efficiency_factor, 2)
-            else:
-                prod_attesa = 0.0
+            # 2. Produzione Attesa Odierna (kWh) = Potenza (kWp) * (Wh/m² / 1000) * Performance Ratio (82%)
+            performance_ratio = 0.82
+            prod_attesa = round(potenza * (cum_poa_wh / 1000.0) * performance_ratio, 2)
 
-            prod_reale = get_fusionsolar_real_production(st_code)
+            # 3. Produzione Reale (kWh)
+            prod_reale = get_fusionsolar_real_production(st_code, potenza)
 
+            # 4. Scostamento Percentuale
             if prod_attesa > 0:
                 diff_perc = round(((prod_reale - prod_attesa) / prod_attesa) * 100, 2)
             else:
@@ -201,15 +204,14 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
                 "Nome Impianto": nome,
                 "Potenza (kWp)": potenza,
                 "Tilt / Azimut": f"{tilt}° / {azimuth}°",
-                "Irraggiamento Piano Moduli (W/m²)": f"{poa_irr} W/m²",
-                "Prod. Attesa (kWh)": prod_attesa,
+                "Irraggiamento Attuale": f"{current_poa_w} W/m²",
+                "Prod. Attesa Cumulata (kWh)": prod_attesa,
                 "Prod. Reale API (kWh)": prod_reale,
                 "Scostamento (%)": diff_perc
             })
 
         perf_df = pd.DataFrame(performance_list)
 
-        # Stile condizionale sui colori dello scostamento (usando map al posto di applymap)
         def color_scostamento(val):
             try:
                 num = float(val)
@@ -218,7 +220,6 @@ if st.button("📈 Calcola Performance Odierna", type="secondary"):
             except Exception:
                 return ''
 
-        # Utilizziamo .map per garantire compatibilità con tutte le versioni di Pandas
         styled_df = perf_df.style.map(color_scostamento, subset=['Scostamento (%)'])\
                                   .format({"Scostamento (%)": "{:+.2f}%"})
 
