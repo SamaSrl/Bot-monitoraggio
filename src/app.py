@@ -80,9 +80,9 @@ def fetch_huawei_data_cached(username, password):
         )
 
         if not token:
-            return None, f"Token non trovato negli header o nei cookie. Header ricevuti: {dict(res_login.headers)}"
+            return None, "Token non trovato negli header o nei cookie."
 
-        # Assegna il token a TUTTI gli header che Huawei potrebbe aspettarsi
+        # Impostiamo gli header per le chiamate successive
         session.headers.update({
             "X-SRT": token,
             "xsrt": token,
@@ -92,14 +92,27 @@ def fetch_huawei_data_cached(username, password):
             "Content-Type": "application/json"
         })
 
-        # 2. LISTA STAZIONI
-        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
-        data_list = res_list.json()
+        # 2. LISTA STAZIONI (Parametri di paginazione standard Huawei OpenAPI)
+        list_payload = {"pageNo": 1, "pageSize": 100}
+        res_list = session.post(f"{HUAWEI_BASE_URL}/getStationList", json=list_payload, timeout=12)
+        
+        try:
+            data_list = res_list.json()
+        except Exception:
+            return None, f"Risposta getStationList non valida (HTTP {res_list.status_code}): {res_list.text[:200]}"
+
+        # Fallback nel caso in cui l'endpoint richieda il body vuoto
+        if not data_list.get("success"):
+            res_list_retry = session.post(f"{HUAWEI_BASE_URL}/getStationList", json={}, timeout=12)
+            data_list = res_list_retry.json()
 
         if not data_list.get("success"):
             return None, f"Errore recupero stazioni: {data_list.get('message')} (failCode: {data_list.get('failCode')})"
 
         stations = data_list.get("data", [])
+        if isinstance(stations, dict):  # Gestisce formati di risposta a dizionario {"list": [...]}
+            stations = stations.get("list", [])
+
         if not stations:
             return None, "Nessun impianto associato a questo account API Huawei."
 
