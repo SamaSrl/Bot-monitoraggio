@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="FusionSolar - Ispezione Lista Stazioni", page_icon="🔍")
-st.title("🔍 Ispezione Risposta Stazioni")
+st.set_page_config(page_title="FusionSolar - Test Rotte", page_icon="🗺️")
+st.title("🗺️ Test Rotte Ufficiali Huawei OpenAPI")
 
 API_USER = (
     st.secrets.get("huawei", {}).get("username")
@@ -18,7 +18,7 @@ API_PASS = (
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-if st.button("🚀 Leggi Risposta RAW Lista Stazioni", type="primary"):
+if st.button("🚀 Esegui Test Rotte", type="primary"):
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
 
@@ -37,20 +37,25 @@ if st.button("🚀 Leggi Risposta RAW Lista Stazioni", type="primary"):
         "X-SRT": token
     })
 
-    # 2. CHIAMATA AGLI ENDPOINT
-    endpoints = [
-        f"{BASE_DOMAIN}/thirdparty/station/list",
-        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
+    # ROTTE REALI DA VERIFICARE
+    endpoints_to_test = [
+        f"{BASE_DOMAIN}/rest/openapi/getStationList",
+        f"{BASE_DOMAIN}/rest/pvms/v1/getStationList",
+        f"{BASE_DOMAIN}/rest/openapi/pvms/v1/stationList",
+        f"{BASE_DOMAIN}/getStationList"
     ]
 
-    for ep in endpoints:
-        st.write(f"--- \n### Prova su Endpoint: `{ep}`")
+    for ep in endpoints_to_test:
+        st.write(f"--- \n### Prova su: `{ep}`")
         try:
-            res = session.post(ep, json={"pageNo": 1, "pageSize": 100}, timeout=12)
-            st.write(f"**Status Code:** {res.status_code}")
+            res = session.post(ep, json={"pageNo": 1}, timeout=12)
+            st.write(f"**Status Code:** `{res.status_code}`")
             try:
-                st.json(res.json())
+                data = res.json()
+                if res.status_code == 200 and data.get("error_code") != "APIG.0101":
+                    st.success("🎯 ENDPOINT TROVATO E FUNZIONANTE!")
+                st.json(data)
             except Exception:
-                st.text(res.text)
+                st.code(res.text[:300], language="html")
         except Exception as e:
-            st.error(f"Errore nella chiamata: {e}")
+            st.error(f"Errore di connessione: {e}")
