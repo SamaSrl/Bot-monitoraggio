@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="FusionSolar - Step 1", page_icon="☀️", layout="wide")
+st.set_page_config(page_title="FusionSolar - Lista Impianti", page_icon="☀️", layout="wide")
 st.title("☀️ FusionSolar - Step 1: Lista Impianti")
 
 API_USER = "Monitoragg_api"
@@ -10,101 +10,86 @@ API_PASS = "Casa150117!!"
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-def try_v1_api(session, username, password):
-    # Login V1 Standard
+# Header di sistema per evitare blocchi o "N/A" da parte dei server Huawei
+HEADERS_BASE = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "clientType": "0"
+}
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_huawei_stations(username, password):
+    session = requests.Session()
+    session.headers.update(HEADERS_BASE)
+
+    # 1. LOGIN
     login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
-    res_login = session.post(login_url, json={"username": username, "password": password}, timeout=10)
-    
-    if res_login.status_code != 200:
-        return None, f"Login V1 fallito HTTP {res_login.status_code}"
+    login_payload = {"username": username, "password": password}
 
+    try:
+        res_login = session.post(login_url, json=login_payload, timeout=12)
+    except Exception as e:
+        return None, f"Errore di rete/connessione: {e}"
+
+    if res_login.status_code != 200:
+        return None, f"Login fallito con Status Code {res_login.status_code}: {res_login.text}"
+
+    login_data = res_login.json()
+    if not login_data.get("success"):
+        return None, f"Login rifiutato da Huawei: {login_data.get('message')} (Codice: {login_data.get('failCode')})"
+
+    # Estrazione Token XSRF dagli Header o dai Cookie
     headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
     token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
-    
-    if not token:
-        return None, "Token V1 non trovato"
 
-    # Header V1
+    if not token:
+        return None, "Login riuscito ma token XSRF non trovato nella risposta."
+
+    # Impostazione Header per le API Gateway Huawei
     session.headers.update({
         "accessSession": token,
         "xsrf-token": token,
-        "XSRF-TOKEN": token
+        "XSRF-TOKEN": token,
+        "X-SRT": token
     })
 
-    # Chiamata V1
-    res = session.post(f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList", json={"pageNo": 1, "pageSize": 100}, timeout=10)
-    return res, "V1 (/rest/openapi/pvms/v1/getStationList)"
-
-def try_thirdparty_api(session, username, password):
-    # Login Thirdparty / V6
-    login_url = f"{BASE_DOMAIN}/thirdparty/login"
-    res_login = session.post(login_url, json={"username": username, "password": password}, timeout=10)
+    # 2. RECUPERO LISTA STAZIONI
+    station_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
     
-    if res_login.status_code != 200:
-        return None, f"Login Thirdparty fallito HTTP {res_login.status_code}"
+    try:
+        res_stations = session.post(station_url, json={"pageNo": 1, "pageSize": 100}, timeout=12)
+    except Exception as e:
+        return None, f"Errore di rete durante il recupero stazioni: {e}"
 
-    headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-    token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
-    
-    if not token:
-        return None, "Token Thirdparty non trovato"
+    if res_stations.status_code != 200:
+        return None, f"Errore HTTP Stazioni ({res_stations.status_code}): {res_stations.text}"
 
-    # Header Thirdparty
-    session.headers.update({
-        "accessSession": token,
-        "xsrf-token": token,
-        "XSRF-TOKEN": token
-    })
+    data = res_stations.json()
+    if not data.get("success"):
+        return None, f"Errore API Stazioni: {data.get('message')} (Codice: {data.get('failCode')})"
 
-    # Chiamata Thirdparty
-    res = session.post(f"{BASE_DOMAIN}/thirdparty/getStationList", json={"pageNo": 1, "pageSize": 100}, timeout=10)
-    return res, "Thirdparty (/thirdparty/getStationList)"
+    stations = data.get("data", [])
+    if isinstance(stations, dict):
+        stations = stations.get("list", [])
+
+    return stations, None
 
 
 if st.button("🔄 Connetti e Carica Impianti", type="primary"):
     st.cache_data.clear()
 
-with st.spinner("Autenticazione e test architetture API in corso..."):
-    session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
-
-    # Prova 1: OpenAPI V1 Standard
-    res_v1, label_v1 = try_v1_api(session, API_USER, API_PASS)
-    
-    stations = None
-    err = None
-    working_label = ""
-
-    if res_v1 and res_v1.status_code == 200:
-        data = res_v1.json()
-        if data.get("error_code") != "APIG.0101":
-            stations = data.get("data", [])
-            working_label = label_v1
-
-    # Prova 2: Thirdparty V6 (se V1 ha dato APIG.0101 o errored)
-    if not stations:
-        session_tp = requests.Session()
-        session_tp.headers.update({"Content-Type": "application/json"})
-        res_tp, label_tp = try_thirdparty_api(session_tp, API_USER, API_PASS)
-        
-        if res_tp and res_tp.status_code == 200:
-            data = res_tp.json()
-            if data.get("error_code") != "APIG.0101":
-                stations = data.get("data", [])
-                working_label = label_tp
-            else:
-                err = f"Entrambe le architetture rispondono APIG.0101. RAW V1: {res_v1.text} | RAW TP: {res_tp.text}"
-        else:
-            raw_v1 = res_v1.text if res_v1 else "N/A"
-            raw_tp = res_tp.text if res_tp else "N/A"
-            err = f"Impossibile accedere. Risposta V1: {raw_v1} | Risposta Thirdparty: {raw_tp}"
+with st.spinner("Autenticazione e recupero impianti in corso..."):
+    stations, err = get_huawei_stations(API_USER, API_PASS)
 
 if err:
     st.error(f"⚠️ {err}")
 elif stations is not None:
-    if isinstance(stations, dict):
-        stations = stations.get("list", [])
-        
-    st.success(f"🎉 Connessione riuscita via **{working_label}**! Trovati **{len(stations)}** impianti.")
+    st.success(f"🎉 Connessione riuscita! Trovati **{len(stations)}** impianti associati.")
     df_stations = pd.DataFrame(stations)
-    st.dataframe(df_stations, use_container_width=True)
+    
+    # Visualizzazione pulita delle colonne principali se presenti
+    cols = [c for c in ["stationCode", "stationName", "capacity", "buildState"] if c in df_stations.columns]
+    if cols:
+        st.dataframe(df_stations[cols], use_container_width=True)
+    else:
+        st.dataframe(df_stations, use_container_width=True)
