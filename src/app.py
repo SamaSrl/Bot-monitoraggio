@@ -39,7 +39,7 @@ def save_plant_config(config):
     os.replace(tmp_path, CONFIG_FILE)
 
 # ----------------------------------------------------------------------------
-# STILI GRAFICI ORIGINALI (COLORI STATO + CYBERPUNK)
+# STILI GRAFICI
 # ----------------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -64,62 +64,55 @@ st.markdown("""
     .fs-title { font-size: 26px; font-weight: 700; color: #ffffff; margin: 0; }
     .fs-subtitle { font-size: 13px; color: #7ee8fa; font-family: 'JetBrains Mono', monospace; margin-top: 4px; }
     
-    /* CARD BASE PER STATO IMPIANTO */
-    .plant-card {
-        border-radius: 14px;
-        padding: 22px;
-        margin-bottom: 20px;
-        background: linear-gradient(160deg, rgba(18,26,42,0.9), rgba(9,13,22,0.9));
-        border: 1px solid rgba(255,255,255,0.07);
+    /* BOX UNICO COMPATTO */
+    .plant-box-ok {
+        background: linear-gradient(160deg, rgba(18,26,42,0.85), rgba(9,13,22,0.85));
+        border: 1px solid rgba(255,255,255,0.08);
+        border-left: 4px solid #00ff88;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 24px;
     }
-    .plant-card-ok {
-        border-left: 5px solid #00ff88 !important;
-        box-shadow: -5px 0 20px -5px rgba(0,255,136,0.2);
-    }
-    .plant-card-alarm {
-        border-left: 5px solid #ff3b3b !important;
-        box-shadow: -5px 0 20px -5px rgba(255,59,59,0.3);
-    }
-    .plant-card-offline {
-        border-left: 5px solid #8e9aaf !important;
-        box-shadow: -5px 0 20px -5px rgba(142,154,175,0.15);
+    .plant-box-alarm {
+        background: linear-gradient(160deg, rgba(30,15,20,0.85), rgba(15,8,10,0.85));
+        border: 1px solid rgba(255,59,59,0.2);
+        border-left: 4px solid #ff3b3b;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 24px;
     }
 
-    .plant-name { font-size: 22px; font-weight: 700; color: #ffffff; }
+    .plant-header-line {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    .plant-name { font-size: 20px; font-weight: 700; color: #ffffff; }
     .plant-code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6fd8ff; background: rgba(0,229,255,0.08); padding: 3px 8px; border-radius: 6px; margin-left: 8px; }
-    .plant-meta { font-size: 13px; color: #9fb0c3; margin-top: 10px; font-family: 'JetBrains Mono', monospace; }
-    .plant-meta span { margin-right: 20px; }
+    .plant-meta { font-size: 13px; color: #9fb0c3; font-family: 'JetBrains Mono', monospace; margin-bottom: 16px; }
+    .plant-meta span { margin-right: 18px; }
 
-    .status-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 999px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
-        font-weight: 600;
-        float: right;
-    }
-    .badge-ok { background: rgba(0,255,136,0.12); color: #00ff88; border: 1px solid rgba(0,255,136,0.4); }
-    .badge-alarm { background: rgba(255,59,59,0.15); color: #ff5c5c; border: 1px solid rgba(255,59,59,0.5); }
-    .badge-offline { background: rgba(142,154,175,0.15); color: #a0aec0; border: 1px solid rgba(142,154,175,0.4); }
+    .status-badge-ok { background: rgba(0,255,136,0.12); color: #00ff88; border: 1px solid rgba(0,255,136,0.4); padding: 4px 12px; border-radius: 999px; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; }
+    .status-badge-alarm { background: rgba(255,59,59,0.15); color: #ff5c5c; border: 1px solid rgba(255,59,59,0.5); padding: 4px 12px; border-radius: 999px; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; }
 
-    .metric-box {
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 10px;
-        padding: 14px;
+    .metric-card {
+        background: rgba(0,0,0,0.25);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 8px;
+        padding: 12px;
         text-align: center;
     }
     .metric-title { font-size: 11px; text-transform: uppercase; color: #8ea3b8; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.5px; }
     .metric-num { font-size: 22px; font-weight: 700; color: #ffffff; margin-top: 4px; }
 
-    .deviation-chip-ok { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.5); color: #00ff88; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
-    .deviation-chip-bad { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(255,59,59,0.12); border: 1px solid rgba(255,59,59,0.5); color: #ff8080; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
+    .dev-ok { color: #00ff88; background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.3); padding: 3px 10px; border-radius: 999px; font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; }
+    .dev-bad { color: #ff8080; background: rgba(255,59,59,0.1); border: 1px solid rgba(255,59,59,0.3); padding: 3px 10px; border-radius: 999px; font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# LOGICA API HUAWEI (COMPLETA CON REAL-KPI ED ALLARMI)
+# LOGICA API HUAWEI
 # ----------------------------------------------------------------------------
 if "fs_session" not in st.session_state: st.session_state.fs_session = None
 if "token_time" not in st.session_state: st.session_state.token_time = 0
@@ -152,52 +145,55 @@ def fetch_stations():
     st.session_state.stations = data.get("data") or []
     return st.session_state.stations
 
-def fetch_station_real_kpi(station_codes):
-    session = get_authenticated_session()
-    res = session.post(f"{BASE_DOMAIN}/thirdData/getStationRealKpi", json={"stationCodes": station_codes}, timeout=15)
-    data = res.json()
-    result = {}
-    for item in data.get("data") or []:
-        result[item.get("stationCode")] = item.get("dataItemMap", {}) or {}
-    return result
-
 def fetch_active_alarms(station_code):
-    session = get_authenticated_session()
-    rome = ZoneInfo("Europe/Rome")
-    now_ms = int(datetime.now(rome).timestamp() * 1000)
-    begin_ms = now_ms - (7 * 24 * 3600 * 1000)
-    
-    res = session.post(
-        f"{BASE_DOMAIN}/thirdData/getAlarmList",
-        json={"stationCodes": station_code, "beginTime": begin_ms, "endTime": now_ms, "status": 1, "language": "it_IT"},
-        timeout=15
-    )
-    data = res.json()
-    return data.get("data") or []
+    try:
+        session = get_authenticated_session()
+        rome = ZoneInfo("Europe/Rome")
+        now_ms = int(datetime.now(rome).timestamp() * 1000)
+        begin_ms = now_ms - (7 * 24 * 3600 * 1000)
+        
+        res = session.post(
+            f"{BASE_DOMAIN}/thirdData/getAlarmList",
+            json={"stationCodes": station_code, "beginTime": begin_ms, "endTime": now_ms, "status": 1, "language": "it_IT"},
+            timeout=15
+        )
+        data = res.json()
+        return data.get("data") or []
+    except Exception:
+        return []
 
 def fetch_yesterday_real_kwh(station_code):
-    session = get_authenticated_session()
-    rome = ZoneInfo("Europe/Rome")
-    yesterday_date = (datetime.now(rome) - timedelta(days=1)).date()
-    y_midnight = datetime(yesterday_date.year, yesterday_date.month, yesterday_date.day, 0, 0, 0, tzinfo=rome)
-    y_end = y_midnight + timedelta(days=1)
-    
-    res = session.post(f"{BASE_DOMAIN}/thirdData/getKpiStationHour", json={"stationCodes": station_code, "collectTime": int(y_midnight.timestamp() * 1000)}, timeout=15)
-    data = res.json()
-    
-    total = 0.0
-    for rec in data.get("data") or []:
-        rec_time = rec.get("collectTime", 0)
-        if int(y_midnight.timestamp() * 1000) <= rec_time < int(y_end.timestamp() * 1000):
-            item = rec.get("dataItemMap", {}) or {}
-            val = item.get("inverter_power") or item.get("product_power") or 0
-            total += float(val)
-    return round(total, 2), yesterday_date.strftime("%d/%m/%Y")
+    try:
+        session = get_authenticated_session()
+        rome = ZoneInfo("Europe/Rome")
+        yesterday_date = (datetime.now(rome) - timedelta(days=1)).date()
+        y_midnight = datetime(yesterday_date.year, yesterday_date.month, yesterday_date.day, 0, 0, 0, tzinfo=rome)
+        y_end = y_midnight + timedelta(days=1)
+        
+        res = session.post(f"{BASE_DOMAIN}/thirdData/getKpiStationHour", json={"stationCodes": station_code, "collectTime": int(y_midnight.timestamp() * 1000)}, timeout=15)
+        data = res.json()
+        
+        total = 0.0
+        records = data.get("data") or []
+        if isinstance(records, list):
+            for rec in records:
+                if isinstance(rec, dict):
+                    rec_time = rec.get("collectTime", 0)
+                    if int(y_midnight.timestamp() * 1000) <= rec_time < int(y_end.timestamp() * 1000):
+                        item = rec.get("dataItemMap", {}) or {}
+                        if isinstance(item, dict):
+                            val = item.get("inverter_power") or item.get("product_power") or 0
+                            total += float(val)
+        return round(total, 2), yesterday_date.strftime("%d/%m/%Y")
+    except Exception:
+        return 0.0, "--/--/----"
 
 # ----------------------------------------------------------------------------
 # CALCOLO METEO ATTESO
 # ----------------------------------------------------------------------------
 def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, pr=0.80):
+    if capacity_kwp <= 0:
+        return 0.0, 0.0
     rome = ZoneInfo("Europe/Rome")
     yesterday_date = (datetime.now(rome) - timedelta(days=1)).date().isoformat()
 
@@ -222,18 +218,18 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, pr=
         peak_sun_hours = total_gti_wh / 1000.0
         expected_kwh = capacity_kwp * peak_sun_hours * pr
         
-        return round(expected_kwh, 2), round(peak_sun_hours, 2), gti_list
+        return round(expected_kwh, 2), round(peak_sun_hours, 2)
     except Exception:
-        return 0.0, 0.0, []
+        return 0.0, 0.0
 
 # ----------------------------------------------------------------------------
-# HEADER PRINCIPALE
+# HEADER
 # ----------------------------------------------------------------------------
 st.markdown("""
 <div class="fs-header">
     <div>
         <p class="fs-title">🛰️ FusionSolar Control Center</p>
-        <p class="fs-subtitle">MONITORAGGIO MULTI-IMPIANTO · ANALISI PRESTAZIONE & ALLARMI REAL-TIME</p>
+        <p class="fs-subtitle">MONITORAGGIO MULTI-IMPIANTO · ANALISI PRESTAZIONE GIORNO PRECEDENTE</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -245,13 +241,13 @@ if not st.session_state.stations:
 stations = st.session_state.stations or []
 
 # ----------------------------------------------------------------------------
-# SIDEBAR LATERALE (GESTIONE CONFIGURAZIONE IMPIANTI)
+# SIDEBAR LATERALE
 # ----------------------------------------------------------------------------
 st.sidebar.header("⚙️ Configurazione Impianto")
 
 if stations:
     station_names = [s.get("stationName", "Senza Nome") for s in stations]
-    selected_name = st.sidebar.selectbox("Seleziona Impianto da Configurare", station_names)
+    selected_name = st.sidebar.selectbox("Seleziona Impianto", station_names)
     
     selected_st = next(s for s in stations if s.get("stationName") == selected_name)
     code = selected_st.get("stationCode")
@@ -265,7 +261,7 @@ if stations:
 
     cap_val = st.sidebar.number_input("Potenza Nominale (kWp)", min_value=0.0, value=float(saved_cfg.get("capacity", raw_capacity)), step=10.0)
     tilt_val = st.sidebar.number_input("Tilt / Inclinazione (°)", min_value=0.0, max_value=90.0, value=float(saved_cfg.get("tilt", 30.0)), step=1.0)
-    azimuth_val = st.sidebar.number_input("Azimut (°)", min_value=-180.0, max_value=180.0, value=float(saved_cfg.get("azimuth", 0.0)), step=1.0, help="0=Sud, -90=Est, +90=Ovest")
+    azimuth_val = st.sidebar.number_input("Azimut (°)", min_value=-180.0, max_value=180.0, value=float(saved_cfg.get("azimuth", 0.0)), step=1.0)
     
     def_lat = saved_cfg.get("lat") or selected_st.get("latitude") or 45.875
     def_lon = saved_cfg.get("lon") or selected_st.get("longitude") or 13.042
@@ -281,45 +277,22 @@ if stations:
             "lat": lat_val, "lon": lon_val, "pr": pr_val
         }
         save_plant_config(st.session_state.plant_config)
-        st.sidebar.success("Configurazione salvata con successo!")
+        st.sidebar.success("Salvato con successo!")
 
 # ----------------------------------------------------------------------------
-# PAGINA PRINCIPALE (VISUALIZZAZIONE IMPIANTI CON COLORI STATO ED ALLARMI)
+# PAGINA PRINCIPALE
 # ----------------------------------------------------------------------------
 if not stations:
-    st.warning("Nessun impianto trovato o errore durante il login.")
+    st.warning("Nessun impianto trovato.")
 else:
-    # Recuperiamo real_kpi globale per lo stato real-time
-    all_codes = ",".join([s.get("stationCode", "") for s in stations if s.get("stationCode")])
-    real_kpi_map = fetch_station_real_kpi(all_codes)
-    
     for st_item in stations:
         st_code = st_item.get("stationCode")
         st_name = st_item.get("stationName")
         st_addr = st_item.get("stationAddr", "N/D")
         
-        kpi = real_kpi_map.get(st_code, {})
-        real_power_kw = float(kpi.get("real_health_state") or 0.0) # Potenza istantanea se disponibile o stato
-        
-        # Recupera Allarmi Attivi per definire il colore dello stato
-        alarms = fetch_active_alarms(st_code)
-        
-        # Determinazione del Bordo Colorato e Badge
-        # 1 = Normale, 2 = Fault/Allarme, 3 = Offline
-        real_health = kpi.get("real_health_state")
-        
-        if len(alarms) > 0 or str(real_health) == "2":
-            card_class = "plant-card-alarm"
-            badge_html = f'<span class="status-badge badge-alarm">⚠️ ALLARME ({len(alarms)})</span>'
-        elif str(real_health) == "3" or str(real_health) == "3.0":
-            card_class = "plant-card-offline"
-            badge_html = '<span class="status-badge badge-offline">🔌 DISCONNESSO</span>'
-        else:
-            card_class = "plant-card-ok"
-            badge_html = '<span class="status-badge badge-ok">🟢 NORMALE</span>'
-        
-        # Parametri configurati
+        # Recupera Parametri
         cfg = st.session_state.plant_config.get(st_code, {})
+        
         raw_cap = float(st_item.get("capacity") or 0.0)
         if 0 < raw_cap < 10 and "rivignano" in st_name.lower():
             raw_cap = raw_cap * 1000.0
@@ -331,56 +304,73 @@ else:
         lon = float(cfg.get("lon") or st_item.get("longitude") or 13.042)
         pr = float(cfg.get("pr", 0.80))
 
-        # Dati Ieri Reali e Attesi
+        # Dati Ieri & Allarmi
         real_kwh, date_str = fetch_yesterday_real_kwh(st_code)
-        exp_kwh, psh, _ = get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity, pr)
-        
-        dev = ((real_kwh - exp_kwh) / exp_kwh * 100) if exp_kwh > 0 else 0
-        dev_class = "deviation-chip-ok" if dev >= -8 else "deviation-chip-bad"
-        sign = "+" if dev >= 0 else ""
+        exp_kwh, psh = get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity, pr)
+        alarms = fetch_active_alarms(st_code)
 
-        # Rendering Card Impianto Colorata
+        # Scostamento
+        if exp_kwh > 0:
+            dev = ((real_kwh - exp_kwh) / exp_kwh * 100)
+            dev_chip = f'<span class="dev-ok">+{dev:.1f}%</span>' if dev >= 0 else f'<span class="dev-bad">{dev:.1f}%</span>'
+        else:
+            dev_chip = '<span class="dev-ok">+0.0%</span>'
+
+        # Badge Stato (Se ci sono allarmi => Allarme, altrimenti NORMALE)
+        if len(alarms) > 0:
+            box_class = "plant-box-alarm"
+            badge_html = f'<span class="status-badge-alarm">⚠️ ALLARME ({len(alarms)})</span>'
+        else:
+            box_class = "plant-box-ok"
+            badge_html = '<span class="status-badge-ok">🟢 NORMALE / ONLINE</span>'
+
+        # CONTAINER UNICO COMPATTO PER IMPIANTO
         st.markdown(f"""
-        <div class="plant-card {card_class}">
-            {badge_html}
-            <span class="plant-name">☀️ {st_name}</span><span class="plant-code">{st_code}</span>
+        <div class="{box_class}">
+            <div class="plant-header-line">
+                <div>
+                    <span class="plant-name">☀️ {st_name}</span>
+                    <span class="plant-code">{st_code}</span>
+                </div>
+                <div>{badge_html}</div>
+            </div>
             <div class="plant-meta">
                 <span>📍 Location: <b>{st_addr}</b></span>
-                <span>⚡ Potenza Nominale: <b>{capacity:,.1f} kWp</b></span>
+                <span>⚡ Potenza: <b>{capacity:,.1f} kWp</b></span>
                 <span>📐 Tilt: <b>{tilt}°</b> | Azimut: <b>{azimuth}°</b> | PR: <b>{pr}</b></span>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
+        # Tre Colonne con Metriche subito sotto la header del box
         col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown(f"""
-            <div class="metric-box">
+            <div class="metric-card">
                 <div class="metric-title">Produzione Reale ({date_str})</div>
-                <div class="metric-num" style="color: #00e5ff;">{real_kwh:,.1f} <span style="font-size:14px;">kWh</span></div>
+                <div class="metric-num" style="color: #00e5ff;">{real_kwh:,.1f} <span style="font-size:13px;">kWh</span></div>
             </div>
             """, unsafe_allow_html=True)
 
         with col2:
             st.markdown(f"""
-            <div class="metric-box">
+            <div class="metric-card">
                 <div class="metric-title">Produzione Attesa (Meteo)</div>
-                <div class="metric-num" style="color: #ffcf5c;">{exp_kwh:,.1f} <span style="font-size:14px;">kWh</span></div>
+                <div class="metric-num" style="color: #ffcf5c;">{exp_kwh:,.1f} <span style="font-size:13px;">kWh</span></div>
             </div>
             """, unsafe_allow_html=True)
 
         with col3:
             st.markdown(f"""
-            <div class="metric-box">
+            <div class="metric-card">
                 <div class="metric-title">Scostamento Prestazione</div>
-                <div style="margin-top:6px;"><span class="{dev_class}">{sign}{dev:.1f}%</span></div>
+                <div style="margin-top:6px;">{dev_chip}</div>
             </div>
             """, unsafe_allow_html=True)
 
-        # Sezione Allarmi Attivi (se presenti)
         if alarms:
-            with st.expander(f"⚠️ Allarmi Attivi per {st_name} ({len(alarms)})", expanded=True):
+            with st.expander(f"⚠️ Dettaglio Allarmi Attivi ({len(alarms)})"):
                 for alm in alarms:
-                    st.error(f"**[{alm.get('alarmName', 'Allarme')}]** - Livello: {alm.get('severity')} | Generato il: {alm.get('raiseTime')}")
+                    st.error(f"**[{alm.get('alarmName', 'Allarme')}]** - Livello: {alm.get('severity')}")
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<hr style='border: 0; height: 1px; background: rgba(255,255,255,0.05); margin: 30px 0;'>", unsafe_allow_html=True)
