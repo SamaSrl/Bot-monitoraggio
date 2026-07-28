@@ -142,6 +142,57 @@ st.markdown("""
     }
     .plant-meta span { margin-right: 18px; }
 
+    .led {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 10px;
+        vertical-align: middle;
+        position: relative;
+        top: -1px;
+    }
+    .led-green {
+        background: #00ff88;
+        box-shadow: 0 0 6px #00ff88, 0 0 14px rgba(0,255,136,0.6);
+    }
+    .led-red {
+        background: #ff3b3b;
+        box-shadow: 0 0 6px #ff3b3b, 0 0 14px rgba(255,59,59,0.7);
+        animation: pulse-red 1.2s infinite;
+    }
+    .led-gray {
+        background: #6b7688;
+        box-shadow: 0 0 4px rgba(107,118,136,0.5);
+    }
+    @keyframes pulse-red {
+        0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; }
+    }
+    .plant-card-alarm {
+        border-left: 3px solid #ff3b3b !important;
+        background: linear-gradient(160deg, rgba(50,15,15,0.5), rgba(9,13,22,0.9)) !important;
+    }
+    .alarm-box {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: rgba(255,59,59,0.08);
+        border: 1px solid rgba(255,59,59,0.35);
+        border-radius: 8px;
+        font-size: 12.5px;
+        color: #ffb3b3;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .production-chip {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(255,183,0,0.1);
+        border: 1px solid rgba(255,183,0,0.4);
+        color: #ffcf5c;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+    }
+
     div[data-testid="stTextInput"] input {
         background-color: rgba(255,255,255,0.04);
         border: 1px solid rgba(0,229,255,0.25);
@@ -188,6 +239,8 @@ if "token_time" not in st.session_state:
     st.session_state.token_time = 0
 if "stations" not in st.session_state:
     st.session_state.stations = None
+if "enriched_at" not in st.session_state:
+    st.session_state.enriched_at = None
 
 
 def do_login():
@@ -246,14 +299,114 @@ def fetch_stations(force=False):
     return st.session_state.stations
 
 
+def _chunk(seq, size):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+def _post_kpi(session, endpoint, codes, extra_body=None, batch_size=100):
+    """Chiama un endpoint KPI Huawei suddividendo stationCodes in batch (max ~100 per call).
+    Ritorna una lista aggregata di record `data`."""
+    results = []
+    for batch in _chunk(codes, batch_size):
+        body = {"stationCodes": ",".join(batch)}
+        if extra_body:
+            body.update(extra_body)
+        res = session.post(f"{BASE_DOMAIN}{endpoint}", json=body, timeout=15)
+        data = res.json()
+        if not data.get("success"):
+            raise RuntimeError(
+                f"{endpoint} fallito: {data.get('message') or ('failCode ' + str(data.get('failCode')))}"
+            )
+        results.extend(data.get("data") or [])
+    return results
+
+
+# Valori noti di real_health_state restituiti da getStationRealKpi:
+# "1" = disconnesso, "2" = in allarme/guasto, "3" = sano/nessun allarme
+HEALTH_OK = "3"
+HEALTH_ALARM = "2"
+HEALTH_DISCONNECTED = "1"
+
+
+def fetch_health_and_yesterday_production(stations):
+    """Arricchisce ogni stazione con: health_state, alarm_texts, yesterday_kwh."""
+    session = get_authenticated_session()
+    codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
+    if not codes:
+        return stations
+
+    # --- 1. Stato di salute / allarme in tempo reale ---
+    health_by_code = {}
+    try:
+        kpi_data = _post_kpi(session, "/thirdData/getStationRealKpi", codes)
+        for rec in kpi_data:
+            code = rec.get("stationCode")
+            item = rec.get("dataItemMap", {}) or {}
+            health_by_code[code] = item.get("real_health_state")
+    except Exception as e:
+        st.warning(f"⚠️ Impossibile recuperare lo stato di salute impianti: {e}")
+
+    # --- 2. Dettaglio allarmi (solo per impianti non sani, per risparmiare chiamate) ---
+    alarm_codes = [c for c, h in health_by_code.items() if h and str(h) != HEALTH_OK]
+    alarms_by_code = {}
+    if alarm_codes:
+        try:
+            now_ms = int(time.time() * 1000)
+            week_ago_ms = now_ms - 7 * 24 * 60 * 60 * 1000
+            alarm_data = _post_kpi(
+                session, "/thirdData/getAlarmList", alarm_codes,
+                extra_body={"beginTime": week_ago_ms, "endTime": now_ms},
+                batch_size=100,
+            )
+            for a in alarm_data:
+                code = a.get("stationCode") or a.get("nStationCode")
+                name = a.get("alarmName") or a.get("faultName") or "Allarme sconosciuto"
+                alarms_by_code.setdefault(code, []).append(name)
+        except Exception as e:
+            st.warning(f"⚠️ Impossibile recuperare il dettaglio allarmi: {e}")
+
+    # --- 3. Produzione di ieri ---
+    prod_by_code = {}
+    try:
+        yesterday = time.localtime(time.time() - 86400)
+        y_midnight = time.mktime((yesterday.tm_year, yesterday.tm_mon, yesterday.tm_mday,
+                                   0, 0, 0, 0, 0, -1))
+        collect_time_ms = int(y_midnight * 1000)
+        prod_data = _post_kpi(
+            session, "/thirdData/getKpiStationDay", codes,
+            extra_body={"collectTime": collect_time_ms},
+        )
+        for rec in prod_data:
+            code = rec.get("stationCode")
+            item = rec.get("dataItemMap", {}) or {}
+            # Il nome del campo può variare: proviamo le chiavi più comuni
+            value = item.get("product_power")
+            if value is None:
+                value = item.get("day_power") or item.get("inverter_power")
+            prod_by_code[code] = value
+    except Exception as e:
+        st.warning(f"⚠️ Impossibile recuperare la produzione di ieri: {e}")
+
+    for s in stations:
+        code = s.get("stationCode")
+        s["health_state"] = health_by_code.get(code)
+        s["alarm_texts"] = alarms_by_code.get(code, [])
+        s["yesterday_kwh"] = prod_by_code.get(code)
+
+    return stations
+
+
 # ----------------------------------------------------------------------------
 # CONTROLS
 # ----------------------------------------------------------------------------
-col_a, col_b, col_c = st.columns([1, 1, 4])
+col_a, col_b, col_c, col_d = st.columns([1, 1, 1.3, 3])
 with col_a:
     load_clicked = st.button("⚡ Carica impianti", type="primary")
 with col_b:
     refresh_clicked = st.button("🔄 Forza refresh")
+with col_c:
+    status_clicked = st.button("🚦 Stato + Produzione ieri")
 
 if load_clicked or refresh_clicked:
     with st.spinner("Connessione al gateway FusionSolar..."):
@@ -261,6 +414,17 @@ if load_clicked or refresh_clicked:
             fetch_stations(force=refresh_clicked)
         except Exception as e:
             st.error(f"❌ Errore: {e}")
+
+if status_clicked:
+    if not st.session_state.stations:
+        st.error("Carica prima la lista impianti.")
+    else:
+        with st.spinner("Recupero stato allarmi e produzione di ieri (può richiedere qualche secondo)..."):
+            try:
+                st.session_state.stations = fetch_health_and_yesterday_production(st.session_state.stations)
+                st.session_state.enriched_at = time.time()
+            except Exception as e:
+                st.error(f"❌ Errore: {e}")
 
 # ----------------------------------------------------------------------------
 # RENDER
@@ -309,6 +473,19 @@ if stations is not None:
 
     st.write(f"**{len(filtered)}** impianti mostrati su {total}")
 
+    has_status_data = any(s.get("health_state") is not None for s in stations)
+    if has_status_data:
+        n_alarm = sum(1 for s in stations if str(s.get("health_state")) == HEALTH_ALARM)
+        n_disc = sum(1 for s in stations if str(s.get("health_state")) == HEALTH_DISCONNECTED)
+        n_ok = sum(1 for s in stations if str(s.get("health_state")) == HEALTH_OK)
+        st.markdown(
+            f"<span class='led led-green'></span> {n_ok} OK &nbsp;&nbsp; "
+            f"<span class='led led-red'></span> {n_alarm} in allarme &nbsp;&nbsp; "
+            f"<span class='led led-gray'></span> {n_disc} disconnessi",
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
     if view_mode == "Schede":
         for s in filtered:
             name = s.get("stationName", "N/D")
@@ -317,21 +494,67 @@ if stations is not None:
             capacity = s.get("capacity", "N/D")
             grid_date = s.get("gridConnectionDate", "N/D")
 
+            health = str(s.get("health_state")) if s.get("health_state") is not None else None
+            if health == HEALTH_ALARM:
+                led_class, card_class = "led-red", "plant-card-alarm"
+            elif health == HEALTH_DISCONNECTED:
+                led_class, card_class = "led-gray", ""
+            elif health == HEALTH_OK:
+                led_class, card_class = "led-green", ""
+            else:
+                led_class, card_class = None, ""
+
+            led_html = f'<span class="led {led_class}"></span>' if led_class else ""
+
+            prod = s.get("yesterday_kwh")
+            prod_html = ""
+            if prod is not None:
+                try:
+                    prod_html = f'<span class="production-chip">🔋 Ieri: {float(prod):,.1f} kWh</span>'
+                except (TypeError, ValueError):
+                    prod_html = f'<span class="production-chip">🔋 Ieri: {prod}</span>'
+
+            alarms = s.get("alarm_texts") or []
+            alarm_html = ""
+            if alarms:
+                alarm_list = "".join(f"⚠️ {a}<br>" for a in alarms[:5])
+                alarm_html = f'<div class="alarm-box">{alarm_list}</div>'
+
             st.markdown(f"""
-            <div class="plant-card">
-                <span class="plant-name">☀️ {name}</span><span class="plant-code">{code}</span>
+            <div class="plant-card {card_class}">
+                {led_html}<span class="plant-name">☀️ {name}</span><span class="plant-code">{code}</span>
                 <div class="plant-meta">
                     <span>📍 {addr}</span>
                     <span>⚡ {capacity} kWp</span>
                     <span>📅 Connesso: {grid_date}</span>
+                    {prod_html}
                 </div>
+                {alarm_html}
             </div>
             """, unsafe_allow_html=True)
     else:
         df = pd.DataFrame(filtered)
-        cols_priority = ["stationCode", "stationName", "stationAddr", "capacity", "gridConnectionDate"]
+        if has_status_data:
+            df["health_state"] = df.get("health_state")
+            df["alarm_texts"] = df.get("alarm_texts", pd.Series([[]] * len(df))).apply(
+                lambda x: "; ".join(x) if isinstance(x, list) else x
+            )
+        cols_priority = ["stationCode", "stationName", "stationAddr", "capacity",
+                          "gridConnectionDate", "health_state", "alarm_texts", "yesterday_kwh"]
         ordered_cols = [c for c in cols_priority if c in df.columns] + [c for c in df.columns if c not in cols_priority]
         st.dataframe(df[ordered_cols], use_container_width=True, height=500)
+
+    if has_status_data:
+        with st.expander("🛠️ Debug: dati grezzi stato/produzione (per verificare i nomi dei campi)"):
+            st.json([
+                {
+                    "stationCode": s.get("stationCode"),
+                    "health_state": s.get("health_state"),
+                    "alarm_texts": s.get("alarm_texts"),
+                    "yesterday_kwh": s.get("yesterday_kwh"),
+                }
+                for s in filtered[:10]
+            ])
 
 else:
     st.info("👆 Premi **Carica impianti** per connetterti al gateway ed elencare tutti gli impianti disponibili.")
