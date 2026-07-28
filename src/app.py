@@ -367,9 +367,11 @@ def fetch_health_and_yesterday_production(stations):
             st.warning(f"⚠️ Impossibile recuperare il dettaglio allarmi: {e}")
 
     # --- 3. Produzione di ieri ---
-    # IMPORTANTE: calcoliamo la mezzanotte di "ieri" nel fuso orario dell'impianto
-    # (Europe/Rome), non in quello del server su cui gira lo script — altrimenti
-    # si rischia di interrogare il giorno sbagliato o un giorno parziale.
+    # L'endpoint "getKpiStationDay" si è rivelato inaffidabile: a volte
+    # restituisce il cumulato parziale di OGGI invece del totale di ieri.
+    # Per essere sicuri sommiamo noi stessi i valori ORARI ("getKpiStationHour")
+    # dell'intera giornata di ieri, verificando che ogni collectTime orario
+    # ricada davvero nel giorno richiesto.
     prod_by_code = {}
     raw_kpi_by_code = {}
     try:
@@ -381,26 +383,41 @@ def fetch_health_and_yesterday_production(stations):
         yesterday_date = (now_rome - timedelta(days=1)).date()
         y_midnight = datetime(yesterday_date.year, yesterday_date.month, yesterday_date.day,
                                0, 0, 0, tzinfo=rome)
+        y_end = y_midnight + timedelta(days=1)
         collect_time_ms = int(y_midnight.timestamp() * 1000)
-        st.session_state["_debug_collect_time"] = f"{y_midnight.isoformat()} → {collect_time_ms} ms"
+        st.session_state["_debug_collect_time"] = (
+            f"giorno richiesto: {yesterday_date.isoformat()} "
+            f"(collectTime={collect_time_ms})"
+        )
 
-        prod_data = _post_kpi(
-            session, "/thirdData/getKpiStationDay", codes,
+        hourly_data = _post_kpi(
+            session, "/thirdData/getKpiStationHour", codes,
             extra_body={"collectTime": collect_time_ms},
         )
-        for rec in prod_data:
+
+        sums = {}
+        hourly_debug = {}
+        for rec in hourly_data:
             code = rec.get("stationCode")
             item = rec.get("dataItemMap", {}) or {}
-            raw_kpi_by_code[code] = item
-            # Ordine di priorità dei possibili nomi campo per l'energia
-            # prodotta nel giorno (in kWh). "product_power" e "inverter_power"
-            # sono quelli documentati da Huawei per gli endpoint di riepilogo
-            # giornaliero; se nessuno dei due è presente lasciamo il campo
-            # vuoto piuttosto che indovinare un valore sbagliato.
-            value = item.get("product_power")
-            if value is None:
-                value = item.get("inverter_power")
-            prod_by_code[code] = value
+            rec_time_ms = rec.get("collectTime")
+
+            # teniamo solo i punti orari che ricadono davvero nel giorno "ieri"
+            in_range = (
+                rec_time_ms is not None
+                and int(y_midnight.timestamp() * 1000) <= rec_time_ms < int(y_end.timestamp() * 1000)
+            )
+            if not in_range:
+                continue
+
+            val = item.get("inverter_power") or item.get("product_power") or item.get("power_profit")
+            if val is not None:
+                sums[code] = sums.get(code, 0) + float(val)
+            hourly_debug.setdefault(code, []).append({"collectTime": rec_time_ms, "dataItemMap": item})
+
+        for code, total in sums.items():
+            prod_by_code[code] = round(total, 2)
+        raw_kpi_by_code = hourly_debug
     except Exception as e:
         st.warning(f"⚠️ Impossibile recuperare la produzione di ieri: {e}")
 
@@ -562,11 +579,11 @@ if stations is not None:
 
     if has_status_data:
         with st.expander("🛠️ Debug: dati grezzi stato/produzione (per verificare i nomi dei campi)"):
-            st.markdown(f"**collectTime usato per 'ieri':** `{st.session_state.get('_debug_collect_time', 'N/D')}`")
-            st.caption("Se questa data non corrisponde a ieri, o se `yesterday_kwh` non combacia con "
-                       "quanto mostrato nel portale FusionSolar, guarda il campo `_raw_kpi` qui sotto: "
-                       "contiene TUTTI i valori restituiti da Huawei per quell'impianto, così individuiamo "
-                       "insieme il nome esatto del campo giusto.")
+            st.markdown(f"**{st.session_state.get('_debug_collect_time', 'N/D')}**")
+            st.caption("`yesterday_kwh_estratto` è la SOMMA dei valori orari (`getKpiStationHour`) "
+                       "ricadenti nel giorno richiesto. `_raw_kpi` mostra tutti i singoli punti orari "
+                       "usati nel calcolo: controlla che siano ~24 e che le date/ore abbiano senso "
+                       "(es. valori diversi da zero solo nelle ore di luce).")
             st.json([
                 {
                     "stationCode": s.get("stationCode"),
@@ -574,6 +591,7 @@ if stations is not None:
                     "health_state": s.get("health_state"),
                     "alarm_texts": s.get("alarm_texts"),
                     "yesterday_kwh_estratto": s.get("yesterday_kwh"),
+                    "n_punti_orari": len(s.get("_raw_kpi") or []),
                     "_raw_kpi": s.get("_raw_kpi"),
                 }
                 for s in filtered[:10]
