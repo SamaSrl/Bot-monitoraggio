@@ -10,10 +10,8 @@ API_PASS = "Casa150117!!"
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-# Header di sistema per evitare blocchi o "N/A" da parte dei server Huawei
 HEADERS_BASE = {
     "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "clientType": "0"
 }
 
@@ -22,51 +20,42 @@ def get_huawei_stations(username, password):
     session = requests.Session()
     session.headers.update(HEADERS_BASE)
 
-    # 1. LOGIN
+    # 1. Login
     login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
-    login_payload = {"username": username, "password": password}
-
-    try:
-        res_login = session.post(login_url, json=login_payload, timeout=12)
-    except Exception as e:
-        return None, f"Errore di rete/connessione: {e}"
-
+    res_login = session.post(login_url, json={"username": username, "password": password}, timeout=12)
+    
     if res_login.status_code != 200:
-        return None, f"Login fallito con Status Code {res_login.status_code}: {res_login.text}"
+        return None, f"Errore HTTP Login ({res_login.status_code}): {res_login.text}"
 
-    login_data = res_login.json()
-    if not login_data.get("success"):
-        return None, f"Login rifiutato da Huawei: {login_data.get('message')} (Codice: {login_data.get('failCode')})"
-
-    # Estrazione Token XSRF dagli Header o dai Cookie
+    # Token Extraction
     headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
     token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
 
     if not token:
-        return None, "Login riuscito ma token XSRF non trovato nella risposta."
+        return None, "Token XSRF non trovato."
 
-    # Impostazione Header per le API Gateway Huawei
     session.headers.update({
         "accessSession": token,
         "xsrf-token": token,
-        "XSRF-TOKEN": token,
-        "X-SRT": token
+        "XSRF-TOKEN": token
     })
 
-    # 2. RECUPERO LISTA STAZIONI
-    station_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
-    
-    try:
-        res_stations = session.post(station_url, json={"pageNo": 1, "pageSize": 100}, timeout=12)
-    except Exception as e:
-        return None, f"Errore di rete durante il recupero stazioni: {e}"
+    # 2. Chiamata getStationList
+    endpoint = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
+    res = session.post(endpoint, json={"pageNo": 1, "pageSize": 100}, timeout=12)
 
-    if res_stations.status_code != 200:
-        return None, f"Errore HTTP Stazioni ({res_stations.status_code}): {res_stations.text}"
+    if res.status_code != 200:
+        # Tentativo Fallback su getPlantList
+        endpoint_alt = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getPlantList"
+        res_alt = session.post(endpoint_alt, json={"pageNo": 1, "pageSize": 100}, timeout=12)
+        if res_alt.status_code == 200:
+            res = res_alt
+        else:
+            return None, f"Errore HTTP ({res.status_code}): {res.text}"
 
-    data = res_stations.json()
+    data = res.json()
     if not data.get("success"):
-        return None, f"Errore API Stazioni: {data.get('message')} (Codice: {data.get('failCode')})"
+        return None, f"Errore API Huawei: {data.get('message')} (Codice: {data.get('failCode')})"
 
     stations = data.get("data", [])
     if isinstance(stations, dict):
@@ -86,10 +75,4 @@ if err:
 elif stations is not None:
     st.success(f"🎉 Connessione riuscita! Trovati **{len(stations)}** impianti associati.")
     df_stations = pd.DataFrame(stations)
-    
-    # Visualizzazione pulita delle colonne principali se presenti
-    cols = [c for c in ["stationCode", "stationName", "capacity", "buildState"] if c in df_stations.columns]
-    if cols:
-        st.dataframe(df_stations[cols], use_container_width=True)
-    else:
-        st.dataframe(df_stations, use_container_width=True)
+    st.dataframe(df_stations, use_container_width=True)
