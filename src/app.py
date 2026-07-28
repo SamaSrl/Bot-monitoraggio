@@ -5,6 +5,8 @@ import json
 import os
 import textwrap
 import pandas as pd
+from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️", layout="wide")
 
@@ -12,15 +14,12 @@ st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️",
 def render_html(html):
     """st.markdown con unsafe_allow_html, ma prima rimuove l'indentazione
     Python della stringa: senza questo, le righe rientrate vengono a volte
-    interpretate come blocchi di codice Markdown invece che come HTML,
-    mostrando tag letterali (es. '</div>') invece di renderizzarli."""
+    interpretate come blocchi di codice Markdown invece che come HTML."""
     st.markdown(textwrap.dedent(html).strip(), unsafe_allow_html=True)
 
 
 # ----------------------------------------------------------------------------
-# CREDENZIALI — non hardcodare. Crea .streamlit/secrets.toml con:
-# API_USER = "il_tuo_username_northbound"
-# API_SYSTEM_CODE = "il_tuo_systemCode"
+# CREDENZIALI — non hardcodare.
 # ----------------------------------------------------------------------------
 API_USER = st.secrets.get("API_USER", "")
 API_SYSTEM_CODE = st.secrets.get("API_SYSTEM_CODE", "")
@@ -28,9 +27,7 @@ BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 TOKEN_VALIDITY_SECONDS = 25 * 60  # rinnova login prima della scadenza reale (~30 min)
 
 # ----------------------------------------------------------------------------
-# CONFIGURAZIONE PERSISTENTE PER IMPIANTO (tilt, azimut, coordinate, PR)
-# Salvata su file JSON accanto allo script: sopravvive a refresh e riavvii,
-# perché st.session_state da solo si perderebbe ad ogni nuova sessione browser.
+# CONFIGURAZIONE PERSISTENTE PER IMPIANTO
 # ----------------------------------------------------------------------------
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plant_config.json")
 
@@ -50,6 +47,7 @@ def save_plant_config(config):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
     os.replace(tmp_path, CONFIG_FILE)
+
 
 # ----------------------------------------------------------------------------
 # STYLE — tema dark "tecnologico"
@@ -227,6 +225,7 @@ st.markdown("""
         color: #ffcf5c;
         font-family: 'JetBrains Mono', monospace;
         font-size: 12px;
+        margin-right: 8px;
     }
     .deviation-chip-ok {
         display: inline-block;
@@ -314,7 +313,6 @@ if "expected_results" not in st.session_state:
 
 
 def do_login():
-    """Effettua il login e restituisce una requests.Session autenticata."""
     session = requests.Session()
     session.headers.update({"Content-Type": "application/json"})
     res = session.post(
@@ -336,7 +334,6 @@ def do_login():
 
 
 def get_authenticated_session():
-    """Riutilizza la sessione se ancora valida, altrimenti rifà login."""
     now = time.time()
     if st.session_state.fs_session and (now - st.session_state.token_time) < TOKEN_VALIDITY_SECONDS:
         return st.session_state.fs_session
@@ -360,7 +357,6 @@ def fetch_stations(force=False):
     data = res.json()
 
     if not data.get("success"):
-        # se il token è scaduto, riprova con un login pulito una sola volta
         if data.get("failCode") in (407, 305) and not force:
             return fetch_stations(force=True)
         raise RuntimeError(data.get("message") or f"failCode {data.get('failCode')}")
@@ -375,8 +371,6 @@ def _chunk(seq, size):
 
 
 def _post_kpi(session, endpoint, codes, extra_body=None, batch_size=100):
-    """Chiama un endpoint KPI Huawei suddividendo stationCodes in batch (max ~100 per call).
-    Ritorna una lista aggregata di record `data`."""
     results = []
     for batch in _chunk(codes, batch_size):
         body = {"stationCodes": ",".join(batch)}
@@ -392,21 +386,17 @@ def _post_kpi(session, endpoint, codes, extra_body=None, batch_size=100):
     return results
 
 
-# Valori noti di real_health_state restituiti da getStationRealKpi:
-# "1" = disconnesso, "2" = in allarme/guasto, "3" = sano/nessun allarme
 HEALTH_OK = "3"
 HEALTH_ALARM = "2"
 HEALTH_DISCONNECTED = "1"
 
 
 def fetch_health_and_yesterday_production(stations):
-    """Arricchisce ogni stazione con: health_state, alarm_texts, yesterday_kwh."""
     session = get_authenticated_session()
     codes = [s.get("stationCode") for s in stations if s.get("stationCode")]
     if not codes:
         return stations
 
-    # --- 1. Stato di salute / allarme in tempo reale ---
     health_by_code = {}
     try:
         kpi_data = _post_kpi(session, "/thirdData/getStationRealKpi", codes)
@@ -417,7 +407,6 @@ def fetch_health_and_yesterday_production(stations):
     except Exception as e:
         st.warning(f"⚠️ Impossibile recuperare lo stato di salute impianti: {e}")
 
-    # --- 2. Dettaglio allarmi (solo per impianti non sani, per risparmiare chiamate) ---
     alarm_codes = [c for c, h in health_by_code.items() if h and str(h) != HEALTH_OK]
     alarms_by_code = {}
     if alarm_codes:
@@ -436,18 +425,9 @@ def fetch_health_and_yesterday_production(stations):
         except Exception as e:
             st.warning(f"⚠️ Impossibile recuperare il dettaglio allarmi: {e}")
 
-    # --- 3. Produzione di ieri ---
-    # L'endpoint "getKpiStationDay" si è rivelato inaffidabile: a volte
-    # restituisce il cumulato parziale di OGGI invece del totale di ieri.
-    # Per essere sicuri sommiamo noi stessi i valori ORARI ("getKpiStationHour")
-    # dell'intera giornata di ieri, verificando che ogni collectTime orario
-    # ricada davvero nel giorno richiesto.
     prod_by_code = {}
     raw_kpi_by_code = {}
     try:
-        from zoneinfo import ZoneInfo
-        from datetime import datetime, timedelta
-
         rome = ZoneInfo("Europe/Rome")
         now_rome = datetime.now(rome)
         yesterday_date = (now_rome - timedelta(days=1)).date()
@@ -455,10 +435,6 @@ def fetch_health_and_yesterday_production(stations):
                                0, 0, 0, tzinfo=rome)
         y_end = y_midnight + timedelta(days=1)
         collect_time_ms = int(y_midnight.timestamp() * 1000)
-        st.session_state["_debug_collect_time"] = (
-            f"giorno richiesto: {yesterday_date.isoformat()} "
-            f"(collectTime={collect_time_ms})"
-        )
 
         hourly_data = _post_kpi(
             session, "/thirdData/getKpiStationHour", codes,
@@ -472,7 +448,6 @@ def fetch_health_and_yesterday_production(stations):
             item = rec.get("dataItemMap", {}) or {}
             rec_time_ms = rec.get("collectTime")
 
-            # teniamo solo i punti orari che ricadono davvero nel giorno "ieri"
             in_range = (
                 rec_time_ms is not None
                 and int(y_midnight.timestamp() * 1000) <= rec_time_ms < int(y_end.timestamp() * 1000)
@@ -502,19 +477,11 @@ def fetch_health_and_yesterday_production(stations):
 
 
 def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, performance_ratio=0.80):
-    """Calcola la produzione attesa di ieri usando l'irraggiamento sul piano
-    inclinato (Global Tilted Irradiance) di Open-Meteo, dati tilt/azimut reali
-    dell'impianto. Convenzione azimut Open-Meteo: 0=Sud, -90=Est, +90=Ovest
-    (stessa convenzione tipicamente usata in Italia per gli impianti FV).
-
-    Ritorna (expected_kwh, raw_hourly_debug).
-    """
-    from zoneinfo import ZoneInfo
-    from datetime import datetime, timedelta
-
+    """Calcola la produzione attesa di ieri usando Open-Meteo."""
     rome = ZoneInfo("Europe/Rome")
     yesterday = (datetime.now(rome) - timedelta(days=1)).date().isoformat()
 
+    # Utilizzo past_days=2 nell'API forecast per garantire di avere l'intero giorno di ieri
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -540,7 +507,6 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, per
     for gti in gti_values:
         if gti is None:
             continue
-        # GTI è una media oraria in W/m²: diviso 1000 (STC) * kWp * PR = kWh per quell'ora
         total_kwh += (gti / 1000.0) * capacity_kwp * performance_ratio
 
     debug = {
@@ -553,17 +519,11 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, per
 
 
 def get_yesterday_date_str():
-    from zoneinfo import ZoneInfo
-    from datetime import datetime, timedelta
     rome = ZoneInfo("Europe/Rome")
     return (datetime.now(rome) - timedelta(days=1)).date().isoformat()
 
 
 def calculate_expected_for_configured(stations, force=False):
-    """Calcola produzione attesa/scostamento per tutti gli impianti che hanno
-    una configurazione (tilt/azimut/coordinate) salvata. Usa una cache per
-    giorno: se il risultato per 'ieri' è già stato calcolato non richiama
-    di nuovo l'API meteo, a meno che force=True (ricalcolo manuale)."""
     target_date = get_yesterday_date_str()
     by_code = {s.get("stationCode"): s for s in stations}
 
@@ -589,8 +549,7 @@ def calculate_expected_for_configured(stations, force=False):
 
 
 # ----------------------------------------------------------------------------
-# CARICAMENTO AUTOMATICO — impianti + stato + allarmi + produzione di ieri
-# vengono caricati da soli all'apertura della pagina, senza bisogno di bottoni.
+# CARICAMENTO AUTOMATICO
 # ----------------------------------------------------------------------------
 if "auto_loaded" not in st.session_state:
     st.session_state.auto_loaded = False
@@ -622,9 +581,7 @@ if not st.session_state.auto_loaded or refresh_clicked:
 
 
 # ----------------------------------------------------------------------------
-# SIDEBAR — configurazione tilt/azimut/coordinate per impianto.
-# La pagina principale mostra SOLO l'elenco impianti; tutta la configurazione
-# vive qui, in una finestra laterale separata, valida per ogni impianto.
+# SIDEBAR
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## ⚙️ Configurazione impianti")
@@ -777,7 +734,6 @@ if stations is not None:
             code = s.get("stationCode", "N/D")
             addr = s.get("stationAddr", "N/D")
             capacity = s.get("capacity", "N/D")
-            grid_date = s.get("gridConnectionDate", "N/D")
 
             health = str(s.get("health_state")) if s.get("health_state") is not None else None
             if health == HEALTH_ALARM:
@@ -799,7 +755,7 @@ if stations is not None:
                 except (TypeError, ValueError):
                     prod_html = f'<span class="production-chip">🔋 Ieri: {prod}</span>'
 
-            # --- Scostamento produzione reale vs attesa (se già calcolato) ---
+            # --- Scostamento produzione reale vs attesa ---
             deviation_html = ""
             exp_result = st.session_state.expected_results.get(code)
             if exp_result and prod is not None:
@@ -818,59 +774,64 @@ if stations is not None:
                             f'<span class="{dev_class}">📐 Attesa: {expected:,.1f} kWh '
                             f'· Scostamento: {sign}{dev_pct:.1f}%</span>'
                         )
-                    except (TypeError, ZeroDivisionError):
+                    except (TypeError, ValueError):
                         pass
 
-            alarms = s.get("alarm_texts") or []
+            alarms_list = s.get("alarm_texts", [])
             alarm_html = ""
-            if alarms:
-                alarm_list = "".join(f"⚠️ {a}<br>" for a in alarms[:5])
-                alarm_html = f'<div class="alarm-box">{alarm_list}</div>'
+            if alarms_list:
+                items = "".join(f"<li>{a}</li>" for a in alarms_list)
+                alarm_html = f'<div class="alarm-box">🚨 <b>Allarmi rilevati:</b><ul style="margin:4px 0 0 18px; padding:0;">{items}</ul></div>'
 
             render_html(f"""
             <div class="plant-card {card_class}">
-                {led_html}<span class="plant-name">☀️ {name}</span><span class="plant-code">{code}</span>
-                <div class="plant-meta">
-                    <span>📍 {addr}</span>
-                    <span>⚡ {capacity} kWp</span>
-                    <span>📅 Connesso: {grid_date}</span>
-                    {prod_html}
-                    {deviation_html}
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <div class="plant-name">{led_html}{name}<span class="plant-code">{code}</span></div>
+                        <div class="plant-meta">
+                            <span>📍 {addr}</span>
+                            <span>⚡ {capacity} kWp</span>
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        {prod_html}
+                        {deviation_html}
+                    </div>
                 </div>
                 {alarm_html}
             </div>
             """)
+
     else:
-        df = pd.DataFrame(filtered)
-        if has_status_data:
-            df["health_state"] = df.get("health_state")
-            df["alarm_texts"] = df.get("alarm_texts", pd.Series([[]] * len(df))).apply(
-                lambda x: "; ".join(x) if isinstance(x, list) else x
-            )
-        cols_priority = ["stationCode", "stationName", "stationAddr", "capacity",
-                          "gridConnectionDate", "health_state", "alarm_texts", "yesterday_kwh"]
-        ordered_cols = [c for c in cols_priority if c in df.columns] + [c for c in df.columns if c not in cols_priority]
-        st.dataframe(df[ordered_cols], use_container_width=True, height=500)
+        # Visualizzazione Tabella
+        table_data = []
+        for s in filtered:
+            code = s.get("stationCode", "")
+            exp_res = st.session_state.expected_results.get(code, {})
+            expected = exp_res.get("expected_kwh") if isinstance(exp_res, dict) else None
+            
+            real_prod = s.get("yesterday_kwh")
+            dev_str = "N/D"
+            if real_prod is not None and expected:
+                try:
+                    dev_pct = (float(real_prod) - float(expected)) / float(expected) * 100
+                    dev_str = f"{dev_pct:+.1f}%"
+                except Exception:
+                    pass
 
-    if has_status_data:
-        with st.expander("🛠️ Debug: dati grezzi stato/produzione (per verificare i nomi dei campi)"):
-            st.markdown(f"**{st.session_state.get('_debug_collect_time', 'N/D')}**")
-            st.caption("`yesterday_kwh_estratto` è la SOMMA dei valori orari (`getKpiStationHour`) "
-                       "ricadenti nel giorno richiesto. `_raw_kpi` mostra tutti i singoli punti orari "
-                       "usati nel calcolo: controlla che siano ~24 e che le date/ore abbiano senso "
-                       "(es. valori diversi da zero solo nelle ore di luce).")
-            st.json([
-                {
-                    "stationCode": s.get("stationCode"),
-                    "stationName": s.get("stationName"),
-                    "health_state": s.get("health_state"),
-                    "alarm_texts": s.get("alarm_texts"),
-                    "yesterday_kwh_estratto": s.get("yesterday_kwh"),
-                    "n_punti_orari": len(s.get("_raw_kpi") or []),
-                    "_raw_kpi": s.get("_raw_kpi"),
-                }
-                for s in filtered[:10]
-            ])
+            health_map = {HEALTH_OK: "🟢 OK", HEALTH_ALARM: "🔴 Allarme", HEALTH_DISCONNECTED: "⚪ Offline"}
+            health_str = health_map.get(str(s.get("health_state")), "N/D")
 
-else:
-    st.info("Caricamento in corso o credenziali mancanti — controlla eventuali errori sopra.")
+            table_data.append({
+                "Stato": health_str,
+                "Nome Impianto": s.get("stationName"),
+                "Codice": code,
+                "Indirizzo": s.get("stationAddr"),
+                "Potenza (kWp)": s.get("capacity"),
+                "Produzione Ieri (kWh)": real_prod,
+                "Produzione Attesa (kWh)": expected if expected else "N/D",
+                "Scostamento": dev_str
+            })
+            
+        df = pd.DataFrame(table_data)
+        st.dataframe(df, use_container_width=True)
