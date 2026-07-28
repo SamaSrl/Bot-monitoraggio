@@ -552,6 +552,42 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, per
     return round(total_kwh, 2), debug
 
 
+def get_yesterday_date_str():
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
+    rome = ZoneInfo("Europe/Rome")
+    return (datetime.now(rome) - timedelta(days=1)).date().isoformat()
+
+
+def calculate_expected_for_configured(stations, force=False):
+    """Calcola produzione attesa/scostamento per tutti gli impianti che hanno
+    una configurazione (tilt/azimut/coordinate) salvata. Usa una cache per
+    giorno: se il risultato per 'ieri' è già stato calcolato non richiama
+    di nuovo l'API meteo, a meno che force=True (ricalcolo manuale)."""
+    target_date = get_yesterday_date_str()
+    by_code = {s.get("stationCode"): s for s in stations}
+
+    for code, cfg in st.session_state.plant_config.items():
+        cached = st.session_state.expected_results.get(code)
+        if cached and cached.get("date") == target_date and not force:
+            continue
+        station = by_code.get(code)
+        if not station:
+            continue
+        try:
+            cap = station.get("capacity")
+            cap = float(cap) if cap not in (None, "N/D", "") else None
+            expected_kwh, raw_debug = get_expected_production_yesterday(
+                cfg.get("lat"), cfg.get("lon"), cfg.get("tilt"), cfg.get("azimuth"),
+                cap, cfg.get("pr", 0.80),
+            )
+            st.session_state.expected_results[code] = {
+                "expected_kwh": expected_kwh, "raw_debug": raw_debug, "date": target_date,
+            }
+        except Exception as e:
+            st.session_state.expected_results[code] = {"error": str(e), "date": target_date}
+
+
 # ----------------------------------------------------------------------------
 # CARICAMENTO AUTOMATICO — impianti + stato + allarmi + produzione di ieri
 # vengono caricati da soli all'apertura della pagina, senza bisogno di bottoni.
@@ -578,7 +614,102 @@ if not st.session_state.auto_loaded or refresh_clicked:
             except Exception as e:
                 st.error(f"❌ Errore nel recupero stato/produzione: {e}")
 
+        if st.session_state.plant_config:
+            with st.spinner("Calcolo produzione attesa per gli impianti configurati..."):
+                calculate_expected_for_configured(st.session_state.stations, force=refresh_clicked)
+
     st.session_state.auto_loaded = True
+
+
+# ----------------------------------------------------------------------------
+# SIDEBAR — configurazione tilt/azimut/coordinate per impianto.
+# La pagina principale mostra SOLO l'elenco impianti; tutta la configurazione
+# vive qui, in una finestra laterale separata, valida per ogni impianto.
+# ----------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("## ⚙️ Configurazione impianti")
+
+    stations_for_sidebar = st.session_state.stations or []
+
+    if not stations_for_sidebar:
+        st.info("Carica prima gli impianti dalla pagina principale.")
+    else:
+        options = {
+            f"{s.get('stationName', 'N/D')}  ·  {s.get('stationCode', '')}": s.get("stationCode")
+            for s in stations_for_sidebar
+        }
+        label_list = list(options.keys())
+        choice_label = st.selectbox("Seleziona impianto", label_list, key="sidebar_plant_choice")
+        sel_code = options[choice_label]
+        sel_station = next((s for s in stations_for_sidebar if s.get("stationCode") == sel_code), {})
+
+        saved_cfg = st.session_state.plant_config.get(sel_code, {})
+        default_lat = saved_cfg.get("lat") or sel_station.get("latitude") or sel_station.get("stationLatitude") or 0.0
+        default_lon = saved_cfg.get("lon") or sel_station.get("longitude") or sel_station.get("stationLongitude") or 0.0
+
+        tilt_val = st.number_input(
+            "Tilt (°)", min_value=0.0, max_value=90.0,
+            value=float(saved_cfg.get("tilt", 30.0)), step=1.0, key=f"sb_tilt_{sel_code}",
+            help="Inclinazione dei pannelli rispetto all'orizzontale"
+        )
+        azimuth_val = st.number_input(
+            "Azimut (°)", min_value=-180.0, max_value=180.0,
+            value=float(saved_cfg.get("azimuth", 0.0)), step=1.0, key=f"sb_az_{sel_code}",
+            help="0 = Sud, -90 = Est, +90 = Ovest, ±180 = Nord"
+        )
+        lat_val = st.number_input(
+            "Latitudine", value=float(default_lat), format="%.6f", key=f"sb_lat_{sel_code}"
+        )
+        lon_val = st.number_input(
+            "Longitudine", value=float(default_lon), format="%.6f", key=f"sb_lon_{sel_code}"
+        )
+        pr_val = st.slider(
+            "Performance Ratio", min_value=0.50, max_value=1.00,
+            value=float(saved_cfg.get("pr", 0.80)), step=0.01, key=f"sb_pr_{sel_code}",
+            help="Perdite di sistema: inverter, cablaggio, temperatura, sporcizia. Tipico: 0.75–0.85"
+        )
+
+        if st.button("💾 Salva e calcola scostamento", type="primary", use_container_width=True):
+            st.session_state.plant_config[sel_code] = {
+                "tilt": tilt_val, "azimuth": azimuth_val,
+                "lat": lat_val, "lon": lon_val, "pr": pr_val,
+            }
+            save_plant_config(st.session_state.plant_config)
+            try:
+                cap = sel_station.get("capacity")
+                cap = float(cap) if cap not in (None, "N/D", "") else None
+                expected_kwh, raw_debug = get_expected_production_yesterday(
+                    lat_val, lon_val, tilt_val, azimuth_val, cap, pr_val
+                )
+                st.session_state.expected_results[sel_code] = {
+                    "expected_kwh": expected_kwh, "raw_debug": raw_debug,
+                    "date": get_yesterday_date_str(),
+                }
+                st.success(f"✅ Salvato. Produzione attesa ieri: {expected_kwh:,.1f} kWh")
+            except Exception as e:
+                st.error(f"Configurazione salvata, ma il calcolo è fallito: {e}")
+
+        current_result = st.session_state.expected_results.get(sel_code)
+        if current_result:
+            if "error" in current_result:
+                st.error(f"Ultimo calcolo fallito: {current_result['error']}")
+            else:
+                st.metric("Produzione attesa (ieri)", f"{current_result['expected_kwh']:,.1f} kWh")
+                real_prod = sel_station.get("yesterday_kwh")
+                if real_prod is not None and current_result["expected_kwh"]:
+                    dev = (float(real_prod) - current_result["expected_kwh"]) / current_result["expected_kwh"] * 100
+                    st.metric("Scostamento", f"{dev:+.1f}%")
+                with st.expander("🛠️ Debug meteo/irraggiamento"):
+                    st.json(current_result["raw_debug"])
+
+        st.divider()
+        n_configured = len(st.session_state.plant_config)
+        st.caption(f"📋 Impianti configurati: **{n_configured}** / {len(stations_for_sidebar)}")
+        if st.button("🔁 Ricalcola tutti i configurati", use_container_width=True):
+            with st.spinner("Ricalcolo produzione attesa per tutti gli impianti configurati..."):
+                calculate_expected_for_configured(stations_for_sidebar, force=True)
+            st.success("Ricalcolo completato")
+
 
 # ----------------------------------------------------------------------------
 # RENDER
@@ -591,24 +722,24 @@ if stations is not None:
 
     m1, m2, m3 = st.columns(3)
     with m1:
-        st.markdown(f"""
+        render_html(f"""
         <div class="metric-card">
             <div class="metric-label">Impianti totali</div>
             <div class="metric-value metric-accent">{total}</div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
     with m2:
-        st.markdown(f"""
+        render_html(f"""
         <div class="metric-card">
             <div class="metric-label">Capacità totale installata</div>
             <div class="metric-value">{total_capacity:,.2f} <span style="font-size:16px;color:#8ea3b8;">kWp</span></div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
     with m3:
         last_sync = time.strftime("%H:%M:%S", time.localtime(st.session_state.token_time))
-        st.markdown(f"""
+        render_html(f"""
         <div class="metric-card">
             <div class="metric-label">Ultima sincronizzazione</div>
             <div class="metric-value" style="font-size:20px; font-family:'JetBrains Mono',monospace;">{last_sync}</div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
     st.write("")
     search = st.text_input("🔍 Cerca impianto per nome, codice o indirizzo", "")
@@ -696,7 +827,7 @@ if stations is not None:
                 alarm_list = "".join(f"⚠️ {a}<br>" for a in alarms[:5])
                 alarm_html = f'<div class="alarm-box">{alarm_list}</div>'
 
-            st.markdown(f"""
+            render_html(f"""
             <div class="plant-card {card_class}">
                 {led_html}<span class="plant-name">☀️ {name}</span><span class="plant-code">{code}</span>
                 <div class="plant-meta">
@@ -708,68 +839,7 @@ if stations is not None:
                 </div>
                 {alarm_html}
             </div>
-            """, unsafe_allow_html=True)
-
-            # --- Configurazione orientamento (tilt/azimut/coordinate) + calcolo scostamento ---
-            saved_cfg = st.session_state.plant_config.get(code, {})
-            default_lat = saved_cfg.get("lat") or s.get("latitude") or s.get("stationLatitude") or 0.0
-            default_lon = saved_cfg.get("lon") or s.get("longitude") or s.get("stationLongitude") or 0.0
-
-            with st.expander(f"⚙️ Configura orientamento — {name}"):
-                cfg_col1, cfg_col2, cfg_col3, cfg_col4 = st.columns(4)
-                with cfg_col1:
-                    tilt_val = st.number_input(
-                        "Tilt (°)", min_value=0.0, max_value=90.0,
-                        value=float(saved_cfg.get("tilt", 30.0)), step=1.0, key=f"tilt_{code}",
-                        help="Inclinazione dei pannelli rispetto all'orizzontale"
-                    )
-                with cfg_col2:
-                    azimuth_val = st.number_input(
-                        "Azimut (°)", min_value=-180.0, max_value=180.0,
-                        value=float(saved_cfg.get("azimuth", 0.0)), step=1.0, key=f"az_{code}",
-                        help="0 = Sud, -90 = Est, +90 = Ovest, ±180 = Nord"
-                    )
-                with cfg_col3:
-                    lat_val = st.number_input(
-                        "Latitudine", value=float(default_lat), format="%.6f", key=f"lat_{code}"
-                    )
-                with cfg_col4:
-                    lon_val = st.number_input(
-                        "Longitudine", value=float(default_lon), format="%.6f", key=f"lon_{code}"
-                    )
-                pr_val = st.slider(
-                    "Performance Ratio (perdite di sistema)", min_value=0.50, max_value=1.00,
-                    value=float(saved_cfg.get("pr", 0.80)), step=0.01, key=f"pr_{code}",
-                    help="Tiene conto di perdite da inverter, cablaggio, temperatura, sporcizia. Tipico: 0.75–0.85"
-                )
-
-                save_col, calc_col = st.columns(2)
-                with save_col:
-                    if st.button("💾 Salva configurazione", key=f"save_{code}"):
-                        st.session_state.plant_config[code] = {
-                            "tilt": tilt_val, "azimuth": azimuth_val,
-                            "lat": lat_val, "lon": lon_val, "pr": pr_val,
-                        }
-                        save_plant_config(st.session_state.plant_config)
-                        st.success("Configurazione salvata ✅")
-
-                with calc_col:
-                    if st.button("📊 Calcola scostamento produzione", key=f"calc_{code}"):
-                        try:
-                            cap = float(capacity) if capacity not in (None, "N/D") else None
-                            expected_kwh, raw_debug = get_expected_production_yesterday(
-                                lat_val, lon_val, tilt_val, azimuth_val, cap, pr_val
-                            )
-                            st.session_state.expected_results[code] = {
-                                "expected_kwh": expected_kwh, "raw_debug": raw_debug
-                            }
-                            st.success(f"Produzione attesa ieri: {expected_kwh:,.1f} kWh")
-                        except Exception as e:
-                            st.error(f"Errore nel calcolo: {e}")
-
-                if code in st.session_state.expected_results:
-                    with st.expander("🛠️ Debug meteo/irraggiamento"):
-                        st.json(st.session_state.expected_results[code]["raw_debug"])
+            """)
     else:
         df = pd.DataFrame(filtered)
         if has_status_data:
