@@ -3,9 +3,19 @@ import requests
 import time
 import json
 import os
+import textwrap
 import pandas as pd
 
 st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️", layout="wide")
+
+
+def render_html(html):
+    """st.markdown con unsafe_allow_html, ma prima rimuove l'indentazione
+    Python della stringa: senza questo, le righe rientrate vengono a volte
+    interpretate come blocchi di codice Markdown invece che come HTML,
+    mostrando tag letterali (es. '</div>') invece di renderizzarli."""
+    st.markdown(textwrap.dedent(html).strip(), unsafe_allow_html=True)
+
 
 # ----------------------------------------------------------------------------
 # CREDENZIALI — non hardcodare. Crea .streamlit/secrets.toml con:
