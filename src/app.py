@@ -367,12 +367,23 @@ def fetch_health_and_yesterday_production(stations):
             st.warning(f"⚠️ Impossibile recuperare il dettaglio allarmi: {e}")
 
     # --- 3. Produzione di ieri ---
+    # IMPORTANTE: calcoliamo la mezzanotte di "ieri" nel fuso orario dell'impianto
+    # (Europe/Rome), non in quello del server su cui gira lo script — altrimenti
+    # si rischia di interrogare il giorno sbagliato o un giorno parziale.
     prod_by_code = {}
+    raw_kpi_by_code = {}
     try:
-        yesterday = time.localtime(time.time() - 86400)
-        y_midnight = time.mktime((yesterday.tm_year, yesterday.tm_mon, yesterday.tm_mday,
-                                   0, 0, 0, 0, 0, -1))
-        collect_time_ms = int(y_midnight * 1000)
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timedelta
+
+        rome = ZoneInfo("Europe/Rome")
+        now_rome = datetime.now(rome)
+        yesterday_date = (now_rome - timedelta(days=1)).date()
+        y_midnight = datetime(yesterday_date.year, yesterday_date.month, yesterday_date.day,
+                               0, 0, 0, tzinfo=rome)
+        collect_time_ms = int(y_midnight.timestamp() * 1000)
+        st.session_state["_debug_collect_time"] = f"{y_midnight.isoformat()} → {collect_time_ms} ms"
+
         prod_data = _post_kpi(
             session, "/thirdData/getKpiStationDay", codes,
             extra_body={"collectTime": collect_time_ms},
@@ -380,10 +391,15 @@ def fetch_health_and_yesterday_production(stations):
         for rec in prod_data:
             code = rec.get("stationCode")
             item = rec.get("dataItemMap", {}) or {}
-            # Il nome del campo può variare: proviamo le chiavi più comuni
+            raw_kpi_by_code[code] = item
+            # Ordine di priorità dei possibili nomi campo per l'energia
+            # prodotta nel giorno (in kWh). "product_power" e "inverter_power"
+            # sono quelli documentati da Huawei per gli endpoint di riepilogo
+            # giornaliero; se nessuno dei due è presente lasciamo il campo
+            # vuoto piuttosto che indovinare un valore sbagliato.
             value = item.get("product_power")
             if value is None:
-                value = item.get("day_power") or item.get("inverter_power")
+                value = item.get("inverter_power")
             prod_by_code[code] = value
     except Exception as e:
         st.warning(f"⚠️ Impossibile recuperare la produzione di ieri: {e}")
@@ -393,38 +409,38 @@ def fetch_health_and_yesterday_production(stations):
         s["health_state"] = health_by_code.get(code)
         s["alarm_texts"] = alarms_by_code.get(code, [])
         s["yesterday_kwh"] = prod_by_code.get(code)
+        s["_raw_kpi"] = raw_kpi_by_code.get(code)
 
     return stations
 
 
 # ----------------------------------------------------------------------------
-# CONTROLS
+# CARICAMENTO AUTOMATICO — impianti + stato + allarmi + produzione di ieri
+# vengono caricati da soli all'apertura della pagina, senza bisogno di bottoni.
 # ----------------------------------------------------------------------------
-col_a, col_b, col_c, col_d = st.columns([1, 1, 1.3, 3])
-with col_a:
-    load_clicked = st.button("⚡ Carica impianti", type="primary")
-with col_b:
-    refresh_clicked = st.button("🔄 Forza refresh")
-with col_c:
-    status_clicked = st.button("🚦 Stato + Produzione ieri")
+if "auto_loaded" not in st.session_state:
+    st.session_state.auto_loaded = False
 
-if load_clicked or refresh_clicked:
-    with st.spinner("Connessione al gateway FusionSolar..."):
+col_a, col_b = st.columns([1, 5])
+with col_a:
+    refresh_clicked = st.button("🔄 Aggiorna tutto")
+
+if not st.session_state.auto_loaded or refresh_clicked:
+    with st.spinner("Connessione al gateway FusionSolar e caricamento impianti..."):
         try:
             fetch_stations(force=refresh_clicked)
         except Exception as e:
-            st.error(f"❌ Errore: {e}")
+            st.error(f"❌ Errore nel caricamento impianti: {e}")
 
-if status_clicked:
-    if not st.session_state.stations:
-        st.error("Carica prima la lista impianti.")
-    else:
-        with st.spinner("Recupero stato allarmi e produzione di ieri (può richiedere qualche secondo)..."):
+    if st.session_state.stations:
+        with st.spinner("Recupero stato, allarmi e produzione di ieri..."):
             try:
                 st.session_state.stations = fetch_health_and_yesterday_production(st.session_state.stations)
                 st.session_state.enriched_at = time.time()
             except Exception as e:
-                st.error(f"❌ Errore: {e}")
+                st.error(f"❌ Errore nel recupero stato/produzione: {e}")
+
+    st.session_state.auto_loaded = True
 
 # ----------------------------------------------------------------------------
 # RENDER
@@ -546,15 +562,22 @@ if stations is not None:
 
     if has_status_data:
         with st.expander("🛠️ Debug: dati grezzi stato/produzione (per verificare i nomi dei campi)"):
+            st.markdown(f"**collectTime usato per 'ieri':** `{st.session_state.get('_debug_collect_time', 'N/D')}`")
+            st.caption("Se questa data non corrisponde a ieri, o se `yesterday_kwh` non combacia con "
+                       "quanto mostrato nel portale FusionSolar, guarda il campo `_raw_kpi` qui sotto: "
+                       "contiene TUTTI i valori restituiti da Huawei per quell'impianto, così individuiamo "
+                       "insieme il nome esatto del campo giusto.")
             st.json([
                 {
                     "stationCode": s.get("stationCode"),
+                    "stationName": s.get("stationName"),
                     "health_state": s.get("health_state"),
                     "alarm_texts": s.get("alarm_texts"),
-                    "yesterday_kwh": s.get("yesterday_kwh"),
+                    "yesterday_kwh_estratto": s.get("yesterday_kwh"),
+                    "_raw_kpi": s.get("_raw_kpi"),
                 }
                 for s in filtered[:10]
             ])
 
 else:
-    st.info("👆 Premi **Carica impianti** per connetterti al gateway ed elencare tutti gli impianti disponibili.")
+    st.info("Caricamento in corso o credenziali mancanti — controlla eventuali errori sopra.")
