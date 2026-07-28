@@ -2,77 +2,116 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="FusionSolar - Lista Impianti", page_icon="☀️", layout="wide")
-st.title("☀️ FusionSolar - Step 1: Lista Impianti")
+st.set_page_config(page_title="FusionSolar - Route Scanner", page_icon="📡", layout="wide")
+st.title("📡 FusionSolar - Scanner Rotte API Gateway")
 
 API_USER = "Monitoragg_api"
 API_PASS = "Casa150117!!"
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-HEADERS_BASE = {
-    "Content-Type": "application/json",
-    "clientType": "0"
-}
+# Elenco di tutte le rotte storiche e correnti usate da Huawei APIG per elencare gli impianti
+TEST_PATHS = [
+    "/rest/openapi/pvms/v1/getStationList",
+    "/rest/openapi/pvms/v1/stationList",
+    "/rest/openapi/pvms/v1/getDevList",
+    "/rest/openapi/pvms/v1/getPlantList",
+    "/rest/openapi/pvms/v1/getStationRealKpi",
+    "/rest/openapi/pvms/v2/getStationList",
+    "/thirdparty/station/list",
+    "/thirdparty/getStationList",
+    "/thirdparty/pvms/v1/getStationList",
+    "/rest/pvms/v1/openapi/getStationList",
+    "/rest/pvms/v1/getStationList",
+    "/openapi/pvms/v1/getStationList",
+    "/pvms/v1/getStationList",
+    "/getStationList"
+]
 
-@st.cache_data(ttl=900, show_spinner=False)
-def get_huawei_stations(username, password):
+if st.button("🚀 Avvia Scansione Rotte APIG", type="primary"):
     session = requests.Session()
-    session.headers.update(HEADERS_BASE)
-
-    # 1. Login
-    login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
-    res_login = session.post(login_url, json={"username": username, "password": password}, timeout=12)
-    
-    if res_login.status_code != 200:
-        return None, f"Errore HTTP Login ({res_login.status_code}): {res_login.text}"
-
-    # Token Extraction
-    headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-    token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
-
-    if not token:
-        return None, "Token XSRF non trovato."
-
     session.headers.update({
-        "accessSession": token,
-        "xsrf-token": token,
-        "XSRF-TOKEN": token
+        "Content-Type": "application/json",
+        "clientType": "0"
     })
 
-    # 2. Chiamata getStationList
-    endpoint = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getStationList"
-    res = session.post(endpoint, json={"pageNo": 1, "pageSize": 100}, timeout=12)
+    # 1. LOGIN
+    st.subheader("1. Verifica Login")
+    login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
+    
+    try:
+        res_login = session.post(login_url, json={"username": API_USER, "password": API_PASS}, timeout=12)
+        st.write(f"**Status Code Login:** `{res_login.status_code}`")
+        
+        headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
+        token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
 
-    if res.status_code != 200:
-        # Tentativo Fallback su getPlantList
-        endpoint_alt = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/getPlantList"
-        res_alt = session.post(endpoint_alt, json={"pageNo": 1, "pageSize": 100}, timeout=12)
-        if res_alt.status_code == 200:
-            res = res_alt
-        else:
-            return None, f"Errore HTTP ({res.status_code}): {res.text}"
+        if not token:
+            st.error("❌ Token non trovato. Impossibile proseguire con la scansione.")
+            st.stop()
 
-    data = res.json()
-    if not data.get("success"):
-        return None, f"Errore API Huawei: {data.get('message')} (Codice: {data.get('failCode')})"
+        st.success(f"🔑 Login OK. Token: `{token[:15]}...`")
 
-    stations = data.get("data", [])
-    if isinstance(stations, dict):
-        stations = stations.get("list", [])
+        session.headers.update({
+            "accessSession": token,
+            "xsrf-token": token,
+            "XSRF-TOKEN": token,
+            "X-SRT": token
+        })
 
-    return stations, None
+    except Exception as e:
+        st.error(f"Errore connessione Login: {e}")
+        st.stop()
 
+    # 2. SCANSIONE ROTTE
+    st.subheader("2. Esito Scansione Endpoint APIG")
+    
+    results = []
+    working_data = None
+    working_path = None
 
-if st.button("🔄 Connetti e Carica Impianti", type="primary"):
-    st.cache_data.clear()
+    progress_bar = st.progress(0)
+    
+    for idx, path in enumerate(TEST_PATHS):
+        full_url = f"{BASE_DOMAIN}{path}"
+        try:
+            res = session.post(full_url, json={"pageNo": 1, "pageSize": 100}, timeout=8)
+            status = res.status_code
+            
+            try:
+                data = res.json()
+                err_code = data.get("error_code", "OK" if status == 200 else "-")
+                msg = data.get("error_msg") or data.get("message") or "Risposta JSON"
+                
+                if status == 200 and err_code != "APIG.0101":
+                    working_data = data
+                    working_path = path
+            except Exception:
+                err_code = "HTML/Text"
+                msg = res.text[:80].replace("\n", " ")
 
-with st.spinner("Autenticazione e recupero impianti in corso..."):
-    stations, err = get_huawei_stations(API_USER, API_PASS)
+            results.append({
+                "Percorso Testato": path,
+                "HTTP Status": status,
+                "Error Code APIG": err_code,
+                "Dettaglio": msg
+            })
+        except Exception as ex:
+            results.append({
+                "Percorso Testato": path,
+                "HTTP Status": "TIMEOUT/ERR",
+                "Error Code APIG": "-",
+                "Dettaglio": str(ex)
+            })
+            
+        progress_bar.progress((idx + 1) / len(TEST_PATHS))
 
-if err:
-    st.error(f"⚠️ {err}")
-elif stations is not None:
-    st.success(f"🎉 Connessione riuscita! Trovati **{len(stations)}** impianti associati.")
-    df_stations = pd.DataFrame(stations)
-    st.dataframe(df_stations, use_container_width=True)
+    df_results = pd.DataFrame(results)
+    st.dataframe(df_results, use_container_width=True)
+
+    if working_path:
+        st.balloons()
+        st.success(f"🎯 **TROVATA ROTTA ATTIVA:** `{working_path}`")
+        st.json(working_data)
+    else:
+        st.warning("⚠️ Tutte le rotte hanno restituito APIG.0101 o 404.")
