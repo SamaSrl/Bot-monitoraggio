@@ -1,98 +1,94 @@
 import streamlit as st
-import pandas as pd
 import requests
-import json
 
-st.set_page_config(page_title="FusionSolar - Accesso Diretto", page_icon="☀️", layout="wide")
-st.title("☀️ FusionSolar - Connessione Flusso Portal / Solarfox")
+st.set_page_config(page_title="FusionSolar - Northbound API", page_icon="📡", layout="wide")
+st.title("📡 FusionSolar - Northbound API (thirdData)")
 
-API_USER = "Monitoragg_api"
-API_PASS = "Casa150117!!"
+# --- Credenziali: NON hardcodare in produzione, usa st.secrets ---
+# Esempio: crea .streamlit/secrets.toml con:
+# API_USER = "il_tuo_username_northbound"
+# API_SYSTEM_CODE = "il_tuo_systemCode"
+API_USER = st.secrets.get("API_USER", "")
+API_SYSTEM_CODE = st.secrets.get("API_SYSTEM_CODE", "")
 
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 
-if st.button("🚀 Connetti con Flusso Portal", type="primary"):
-    session = requests.Session()
-    session.headers.update({
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "clientType": "0"
-    })
+if not API_USER or not API_SYSTEM_CODE:
+    st.warning("Imposta API_USER e API_SYSTEM_CODE in .streamlit/secrets.toml prima di procedere.")
 
-    st.subheader("1. Autenticazione Sessione")
-    login_url = f"{BASE_DOMAIN}/rest/pvms/web/login" # Endpoint di login usato dal portale/integrazioni
-    
-    # Se il primo fallisce, proviamo l'endpoint openapi standard
+if st.button("🚀 Login e recupero lista impianti", type="primary"):
+    session = requests.Session()
+    session.headers.update({"Content-Type": "application/json"})
+
+    # 1. LOGIN — endpoint corretto: /thirdData/login
+    # Body: userName + systemCode (NON username/password)
+    st.subheader("1. Login")
+    login_url = f"{BASE_DOMAIN}/thirdData/login"
+
     try:
-        res_login = session.post(login_url, json={"username": API_USER, "password": API_PASS}, timeout=10)
-        if res_login.status_code != 200:
-            login_url = f"{BASE_DOMAIN}/rest/openapi/pvms/v1/login"
-            res_login = session.post(login_url, json={"username": API_USER, "password": API_PASS}, timeout=10)
-            
-        st.write(f"**Status Login:** `{res_login.status_code}`")
-        
-        # Recupero Token di Sessione
-        token = res_login.cookies.get("XSRF-TOKEN") or res_login.headers.get("xsrf-token")
+        res_login = session.post(
+            login_url,
+            json={"userName": API_USER, "systemCode": API_SYSTEM_CODE},
+            timeout=12,
+        )
+        st.write(f"**Status Code Login:** `{res_login.status_code}`")
+
+        try:
+            login_data = res_login.json()
+            st.json(login_data)
+        except Exception:
+            login_data = {}
+            st.text(res_login.text[:500])
+
+        # Il token arriva come header xsrf-token E/O cookie XSRF-TOKEN
+        headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
+        token = headers_lower.get("xsrf-token") or session.cookies.get("XSRF-TOKEN")
+
         if not token:
-            headers_lower = {k.lower(): v for k, v in res_login.headers.items()}
-            token = headers_lower.get("xsrf-token")
-            
-        st.info(f"Token estratto: `{token}`")
-        
-        # Impostiamo tutti gli header necessari per emulare la sessione attiva
-        session.headers.update({
-            "xsrf-token": token,
-            "XSRF-TOKEN": token,
-            "roaming-token": token,
-            "accessSession": token
-        })
+            st.error(
+                "❌ Token non trovato. Possibili cause: credenziali errate, "
+                "account Northbound disabilitato, oppure una sessione già attiva "
+                "altrove (l'API consente 1 sola sessione per account)."
+            )
+            st.stop()
+
+        st.success(f"🔑 Login OK. Token: `{token[:15]}...`")
+
+        # Per le chiamate successive serve SOLO l'header xsrf-token
+        session.headers.update({"xsrf-token": token})
 
     except Exception as e:
-        st.error(f"Errore durante il login: {e}")
+        st.error(f"Errore connessione Login: {e}")
         st.stop()
 
-    st.markdown("---")
-    st.subheader("2. Recupero Impianti (Rotte Portal & OpenAPI Client)")
+    # 2. LISTA IMPIANTI — endpoint corretto: /thirdData/getStationList
+    st.subheader("2. Lista impianti")
+    station_url = f"{BASE_DOMAIN}/thirdData/getStationList"
 
-    # Proviamo la sequenza di endpoint usati dai connettori terzi
-    endpoints_to_test = [
-        # Endpoint usati dal portale web e dai connettori Solarfox/HomeAssistant
-        ("/rest/pvms/web/station/v1/overview/station-list", {"pageNo": 1, "pageSize": 100}),
-        ("/rest/pvms/web/building/v1/station/list", {"pageNo": 1, "pageSize": 100}),
-        ("/rest/openapi/pvms/v1/getStationList", {"pageNo": 1, "pageSize": 100}),
-        ("/unishare/redirect/getStationList", {"pageNo": 1, "pageSize": 100})
-    ]
+    try:
+        res = session.post(station_url, json={}, timeout=12)
+        st.write(f"**Status Code:** `{res.status_code}`")
 
-    success_data = None
-    working_ep = None
-
-    for ep, payload in endpoints_to_test:
-        url = f"{BASE_DOMAIN}{ep}"
-        st.write(f"Testing: `{ep}` ...")
-        
         try:
-            res = session.post(url, json=payload, timeout=8)
-            st.write(f"-> Status: `{res.status_code}`")
-            
-            if res.status_code == 200:
-                data = res.json()
-                # Verifichiamo se abbiamo una risposta valida priva dell'errore APIG.0101
-                if data.get("error_code") != "APIG.0101" and (data.get("success") == True or "data" in data or "list" in data):
-                    success_data = data
-                    working_ep = ep
-                    break
-                else:
-                    st.caption(f"Risposta: {data}")
-            else:
-                st.caption(f"Errore HTTP: {res.text[:100]}")
-        except Exception as ex:
-            st.caption(f" Eccezione: {ex}")
+            data = res.json()
+        except Exception:
+            st.error("Risposta non JSON:")
+            st.text(res.text[:500])
+            st.stop()
 
-    st.markdown("---")
-    if working_ep:
-        st.balloons()
-        st.success(f"🎉 **CONNESSO CON SUCCESSO tramite la rotta:** `{working_ep}`")
-        st.json(success_data)
-    else:
-        st.warning("⚠️ Nessuno degli endpoint di sessione ha restituito i dati direttamente. Esaminiamo i log qui sopra per sbloccare la chiamata precisa.")
+        if data.get("success") is True or data.get("failCode") in (None, 0):
+            st.balloons()
+            st.success("🎯 Lista impianti recuperata correttamente")
+            st.json(data)
+        else:
+            st.warning(f"⚠️ Chiamata fallita. Dettaglio risposta:")
+            st.json(data)
+            st.info(
+                "Codici di errore comuni:\n"
+                "- **305**: sessione/utente bloccato, troppe richieste ravvicinate\n"
+                "- **407**: token/xsrf-token non valido o scaduto\n"
+                "- **010**: parametri mancanti/non validi\n"
+                "- **020**: nessun permesso sull'impianto/account"
+            )
+    except Exception as ex:
+        st.error(f"Errore nella richiesta: {ex}")
