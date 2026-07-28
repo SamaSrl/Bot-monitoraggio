@@ -39,7 +39,7 @@ def save_plant_config(config):
     os.replace(tmp_path, CONFIG_FILE)
 
 # ----------------------------------------------------------------------------
-# STILE DARK TEKNOLOGICO
+# STILE DARK CYBERPUNK
 # ----------------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -69,31 +69,31 @@ st.markdown("""
         border: 1px solid rgba(255,255,255,0.07);
         border-left: 4px solid #00e5ff;
         border-radius: 14px;
-        padding: 24px;
+        padding: 20px;
         margin-bottom: 20px;
     }
-    .plant-name { font-size: 22px; font-weight: 700; color: #ffffff; }
-    .plant-code { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #6fd8ff; background: rgba(0,229,255,0.08); padding: 4px 10px; border-radius: 6px; margin-left: 10px; }
-    .plant-meta { font-size: 14px; color: #9fb0c3; margin-top: 12px; font-family: 'JetBrains Mono', monospace; }
-    .plant-meta span { margin-right: 24px; }
+    .plant-name { font-size: 20px; font-weight: 700; color: #ffffff; }
+    .plant-code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6fd8ff; background: rgba(0,229,255,0.08); padding: 3px 8px; border-radius: 6px; margin-left: 8px; }
+    .plant-meta { font-size: 13px; color: #9fb0c3; margin-top: 10px; font-family: 'JetBrains Mono', monospace; }
+    .plant-meta span { margin-right: 20px; }
 
     .metric-box {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 12px;
-        padding: 20px;
+        background: rgba(255,255,255,0.02);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 10px;
+        padding: 14px;
         text-align: center;
     }
-    .metric-title { font-size: 12px; text-transform: uppercase; color: #8ea3b8; font-family: 'JetBrains Mono', monospace; letter-spacing: 1px; }
-    .metric-num { font-size: 32px; font-weight: 700; color: #ffffff; margin-top: 6px; }
+    .metric-title { font-size: 11px; text-transform: uppercase; color: #8ea3b8; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.5px; }
+    .metric-num { font-size: 24px; font-weight: 700; color: #ffffff; margin-top: 4px; }
 
-    .deviation-chip-ok { display: inline-block; padding: 6px 16px; border-radius: 999px; background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.5); color: #00ff88; font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 600; }
-    .deviation-chip-bad { display: inline-block; padding: 6px 16px; border-radius: 999px; background: rgba(255,59,59,0.12); border: 1px solid rgba(255,59,59,0.5); color: #ff8080; font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 600; }
+    .deviation-chip-ok { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.5); color: #00ff88; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
+    .deviation-chip-bad { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(255,59,59,0.12); border: 1px solid rgba(255,59,59,0.5); color: #ff8080; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# LOGICA API HUAWEI
+# API HUAWEI
 # ----------------------------------------------------------------------------
 if "fs_session" not in st.session_state: st.session_state.fs_session = None
 if "token_time" not in st.session_state: st.session_state.token_time = 0
@@ -127,7 +127,6 @@ def fetch_stations():
     return st.session_state.stations
 
 def fetch_yesterday_real_kwh(station_code):
-    """Recupera la produzione reale accumulata (kWh) dalle chiamate orari Huawei per IERI."""
     session = get_authenticated_session()
     rome = ZoneInfo("Europe/Rome")
     yesterday_date = (datetime.now(rome) - timedelta(days=1)).date()
@@ -147,13 +146,9 @@ def fetch_yesterday_real_kwh(station_code):
     return round(total, 2), yesterday_date.strftime("%d/%m/%Y")
 
 # ----------------------------------------------------------------------------
-# CALCOLO METEO ATTESO PER IERI
+# CALCOLO METEO ATTESO
 # ----------------------------------------------------------------------------
 def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, pr=0.80):
-    """
-    Richiede a Open-Meteo l'irraggiamento sul piano inclinato (GTI) per l'intera giornata di IERI.
-    Formula: kWp * sum(GTI_orario / 1000) * PR
-    """
     rome = ZoneInfo("Europe/Rome")
     yesterday_date = (datetime.now(rome) - timedelta(days=1)).date().isoformat()
 
@@ -168,150 +163,146 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, pr=
         "timezone": "Europe/Rome"
     }
     
-    res = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=12)
-    res.raise_for_status()
-    data = res.json()
-    
-    gti_list = data.get("hourly", {}).get("global_tilted_irradiance", [])
-    
-    # Somma di tutti i punti orari delle 24h di ieri
-    total_gti_wh = sum(g for g in gti_list if g is not None)
-    peak_sun_hours = total_gti_wh / 1000.0  # Ore di sole equivalente
-    
-    expected_kwh = capacity_kwp * peak_sun_hours * pr
-    
-    return round(expected_kwh, 2), round(peak_sun_hours, 2), gti_list
+    try:
+        res = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=12)
+        res.raise_for_status()
+        data = res.json()
+        gti_list = data.get("hourly", {}).get("global_tilted_irradiance", [])
+        
+        total_gti_wh = sum(g for g in gti_list if g is not None)
+        peak_sun_hours = total_gti_wh / 1000.0
+        expected_kwh = capacity_kwp * peak_sun_hours * pr
+        
+        return round(expected_kwh, 2), round(peak_sun_hours, 2), gti_list
+    except Exception:
+        return 0.0, 0.0, []
 
 # ----------------------------------------------------------------------------
-# HEADER PRINCIPALE
+# HEADER
 # ----------------------------------------------------------------------------
 st.markdown("""
 <div class="fs-header">
     <div>
         <p class="fs-title">🛰️ FusionSolar Control Center</p>
-        <p class="fs-subtitle">CONFRONTO PRODUZIONE REALE VS METEO ATTESA (GIORNO PRECEDENTE)</p>
+        <p class="fs-subtitle">MONITORAGGIO MULTI-IMPIANTO · ANALISI PRESTAZIONE GIORNO PRECEDENTE</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Caricamento impianti
 if not st.session_state.stations:
-    with st.spinner("Connessione a Huawei e caricamento impianti..."):
+    with st.spinner("Caricamento impianti in corso..."):
         fetch_stations()
 
 stations = st.session_state.stations or []
 
-# Isoliamo l'impianto di Rivignano
-rivignano_station = next((s for s in stations if "rivignano" in str(s.get("stationName", "")).lower()), None)
-if not rivignano_station and stations:
-    rivignano_station = stations[0]
-
 # ----------------------------------------------------------------------------
-# SIDEBAR LATERALE (SOLO INPUT E PARAMETRI)
+# SIDEBAR LATERALE (GESTIONE CONFIGURAZIONE IMPIANTI)
 # ----------------------------------------------------------------------------
-st.sidebar.header("⚙️ Parametri Impianto")
+st.sidebar.header("⚙️ Configurazione Impianto")
 
-if rivignano_station:
-    code = rivignano_station.get("stationCode")
-    name = rivignano_station.get("stationName")
+if stations:
+    station_names = [s.get("stationName", "Senza Nome") for s in stations]
+    selected_name = st.sidebar.selectbox("Seleziona Impianto da Configurare", station_names)
     
-    st.sidebar.subheader(f"📍 {name}")
-    st.sidebar.caption(f"Codice: `{code}`")
+    selected_st = next(s for s in stations if s.get("stationName") == selected_name)
+    code = selected_st.get("stationCode")
     
+    st.sidebar.markdown("---")
     saved_cfg = st.session_state.plant_config.get(code, {})
     
+    # Auto-fix capacità (se Huawei invia 1.131 assumiamo intenda 1131 kWp)
+    raw_capacity = float(selected_st.get("capacity") or 0.0)
+    if 0 < raw_capacity < 10 and "rivignano" in selected_name.lower():
+        raw_capacity = raw_capacity * 1000.0
+
+    cap_val = st.sidebar.number_input("Potenza Nominale (kWp)", min_value=0.0, value=float(saved_cfg.get("capacity", raw_capacity)), step=10.0)
     tilt_val = st.sidebar.number_input("Tilt / Inclinazione (°)", min_value=0.0, max_value=90.0, value=float(saved_cfg.get("tilt", 30.0)), step=1.0)
     azimuth_val = st.sidebar.number_input("Azimut (°)", min_value=-180.0, max_value=180.0, value=float(saved_cfg.get("azimuth", 0.0)), step=1.0, help="0=Sud, -90=Est, +90=Ovest")
     
-    def_lat = saved_cfg.get("lat") or rivignano_station.get("latitude") or 45.875
-    def_lon = saved_cfg.get("lon") or rivignano_station.get("longitude") or 13.042
+    def_lat = saved_cfg.get("lat") or selected_st.get("latitude") or 45.875
+    def_lon = saved_cfg.get("lon") or selected_st.get("longitude") or 13.042
     
     lat_val = st.sidebar.number_input("Latitudine", value=float(def_lat), format="%.6f")
     lon_val = st.sidebar.number_input("Longitudine", value=float(def_lon), format="%.6f")
     
-    pr_val = st.sidebar.slider("Performance Ratio (PR)", min_value=0.50, max_value=1.00, value=float(saved_cfg.get("pr", 0.80)), step=0.01, help="Coefficiente di perdite dell'impianto (tipicamente tra 0.75 e 0.85)")
+    pr_val = st.sidebar.slider("Performance Ratio (PR)", min_value=0.50, max_value=1.00, value=float(saved_cfg.get("pr", 0.80)), step=0.01)
 
-    if st.sidebar.button("💾 Salva e Ricalcola", type="primary", use_container_width=True):
+    if st.sidebar.button("💾 Salva Configurazione", type="primary", use_container_width=True):
         st.session_state.plant_config[code] = {
-            "tilt": tilt_val, "azimuth": azimuth_val,
+            "capacity": cap_val, "tilt": tilt_val, "azimuth": azimuth_val,
             "lat": lat_val, "lon": lon_val, "pr": pr_val
         }
         save_plant_config(st.session_state.plant_config)
-        st.sidebar.success("Parametri salvati!")
+        st.sidebar.success("Configurazione salvata con successo!")
 
 # ----------------------------------------------------------------------------
-# PAGINA PRINCIPALE (VISUALIZZAZIONE E CONFRONTO IERI)
+# PAGINA PRINCIPALE (LISTA DI TUTTI GLI IMPIANTI)
 # ----------------------------------------------------------------------------
-if rivignano_station:
-    code = rivignano_station.get("stationCode")
-    name = rivignano_station.get("stationName")
-    addr = rivignano_station.get("stationAddr", "Rivignano")
-    capacity = float(rivignano_station.get("capacity") or 0.0)
-    
-    # 1. Dati Reali Huawei Ieri
-    yesterday_real_kwh, date_str = fetch_yesterday_real_kwh(code)
-    
-    # 2. Dati Meteo Attesi Ieri
-    yesterday_exp_kwh, psh, gti_hourly = get_expected_production_yesterday(lat_val, lon_val, tilt_val, azimuth_val, capacity, pr_val)
-
-    # 3. Scostamento
-    deviation = ((yesterday_real_kwh - yesterday_exp_kwh) / yesterday_exp_kwh * 100) if yesterday_exp_kwh > 0 else 0
-    dev_class = "deviation-chip-ok" if deviation >= -8 else "deviation-chip-bad"
-    sign = "+" if deviation >= 0 else ""
-
-    # Card Info Impianto
-    st.markdown(f"""
-    <div class="plant-card">
-        <span class="plant-name">☀️ {name}</span><span class="plant-code">{code}</span>
-        <div class="plant-meta">
-            <span>📍 Location: <b>{addr}</b></span>
-            <span>⚡ Potenza Nominale: <b>{capacity} kWp</b></span>
-            <span>📐 Configurazione: <b>Tilt {tilt_val}° | Azimut {azimuth_val}°</b></span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.subheader(f"📊 Analisi Resa di Ieri ({date_str})")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Produzione Reale (Huawei)</div>
-            <div class="metric-num" style="color: #00e5ff;">{yesterday_real_kwh:,.1f} <span style="font-size:16px;">kWh</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Produzione Attesa (Meteo)</div>
-            <div class="metric-num" style="color: #ffcf5c;">{yesterday_exp_kwh:,.1f} <span style="font-size:16px;">kWh</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col3:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Scostamento Prestazione</div>
-            <div style="margin-top:12px;"><span class="{dev_class}">{sign}{deviation:.1f}%</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-    st.write("")
-
-    # Tabella Dettaglio Tecnico
-    with st.expander("🔍 Dettaglio dei Calcoli e Irraggiamento Meteo di Ieri"):
-        st.write(f"* **Ore Equivalenti di Sole (Peak Sun Hours):** `{psh} h`")
-        st.write(f"* **Formula applicata:** `{capacity} kWp × {psh} h × {pr_val} (PR) = {yesterday_exp_kwh} kWh`")
-        
-        df_debug = pd.DataFrame({
-            "Ora": [f"{h:02d}:00" for h in range(24)],
-            "Irraggiamento GTI (W/m²)": gti_hourly
-        })
-        st.dataframe(df_debug.T, use_container_width=True)
-
+if not stations:
+    st.warning("Nessun impianto trovato o errore durante il login.")
 else:
-    st.warning("Impianto non trovato o errore durante l'autenticazione.")
+    for st_item in stations:
+        st_code = st_item.get("stationCode")
+        st_name = st_item.get("stationName")
+        st_addr = st_item.get("stationAddr", "N/D")
+        
+        # Recupera parametri salvati o default
+        cfg = st.session_state.plant_config.get(st_code, {})
+        
+        raw_cap = float(st_item.get("capacity") or 0.0)
+        if 0 < raw_cap < 10 and "rivignano" in st_name.lower():
+            raw_cap = raw_cap * 1000.0
+            
+        capacity = float(cfg.get("capacity", raw_cap))
+        tilt = float(cfg.get("tilt", 30.0))
+        azimuth = float(cfg.get("azimuth", 0.0))
+        lat = float(cfg.get("lat") or st_item.get("latitude") or 45.875)
+        lon = float(cfg.get("lon") or st_item.get("longitude") or 13.042)
+        pr = float(cfg.get("pr", 0.80))
+
+        # Calcoli Ieri
+        real_kwh, date_str = fetch_yesterday_real_kwh(st_code)
+        exp_kwh, psh, _ = get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity, pr)
+        
+        dev = ((real_kwh - exp_kwh) / exp_kwh * 100) if exp_kwh > 0 else 0
+        dev_class = "deviation-chip-ok" if dev >= -8 else "deviation-chip-bad"
+        sign = "+" if dev >= 0 else ""
+
+        # Card Impianto
+        st.markdown(f"""
+        <div class="plant-card">
+            <span class="plant-name">☀️ {st_name}</span><span class="plant-code">{st_code}</span>
+            <div class="plant-meta">
+                <span>📍 Location: <b>{st_addr}</b></span>
+                <span>⚡ Potenza: <b>{capacity:,.1f} kWp</b></span>
+                <span>📐 Tilt: <b>{tilt}°</b> | Azimut: <b>{azimuth}°</b> | PR: <b>{pr}</b></span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"""
+            <div class="metric-box">
+                <div class="metric-title">Produzione Reale ({date_str})</div>
+                <div class="metric-num" style="color: #00e5ff;">{real_kwh:,.1f} <span style="font-size:14px;">kWh</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown(f"""
+            <div class="metric-box">
+                <div class="metric-title">Produzione Attesa (Meteo)</div>
+                <div class="metric-num" style="color: #ffcf5c;">{exp_kwh:,.1f} <span style="font-size:14px;">kWh</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col3:
+            st.markdown(f"""
+            <div class="metric-box">
+                <div class="metric-title">Scostamento Prestazione</div>
+                <div style="margin-top:6px;"><span class="{dev_class}">{sign}{dev:.1f}%</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
