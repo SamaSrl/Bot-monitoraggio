@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import time
+import json
+import os
 import pandas as pd
 
 st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️", layout="wide")
@@ -14,6 +16,30 @@ API_USER = st.secrets.get("API_USER", "")
 API_SYSTEM_CODE = st.secrets.get("API_SYSTEM_CODE", "")
 BASE_DOMAIN = "https://eu5.fusionsolar.huawei.com"
 TOKEN_VALIDITY_SECONDS = 25 * 60  # rinnova login prima della scadenza reale (~30 min)
+
+# ----------------------------------------------------------------------------
+# CONFIGURAZIONE PERSISTENTE PER IMPIANTO (tilt, azimut, coordinate, PR)
+# Salvata su file JSON accanto allo script: sopravvive a refresh e riavvii,
+# perché st.session_state da solo si perderebbe ad ogni nuova sessione browser.
+# ----------------------------------------------------------------------------
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plant_config.json")
+
+
+def load_plant_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_plant_config(config):
+    tmp_path = CONFIG_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, CONFIG_FILE)
 
 # ----------------------------------------------------------------------------
 # STYLE — tema dark "tecnologico"
@@ -192,6 +218,36 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace;
         font-size: 12px;
     }
+    .deviation-chip-ok {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(0,255,136,0.1);
+        border: 1px solid rgba(0,255,136,0.4);
+        color: #00ff88;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+    }
+    .deviation-chip-warn {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(255,183,0,0.12);
+        border: 1px solid rgba(255,183,0,0.45);
+        color: #ffcf5c;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+    }
+    .deviation-chip-bad {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(255,59,59,0.1);
+        border: 1px solid rgba(255,59,59,0.45);
+        color: #ff8080;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+    }
 
     div[data-testid="stTextInput"] input {
         background-color: rgba(255,255,255,0.04);
@@ -241,6 +297,10 @@ if "stations" not in st.session_state:
     st.session_state.stations = None
 if "enriched_at" not in st.session_state:
     st.session_state.enriched_at = None
+if "plant_config" not in st.session_state:
+    st.session_state.plant_config = load_plant_config()
+if "expected_results" not in st.session_state:
+    st.session_state.expected_results = {}
 
 
 def do_login():
@@ -431,6 +491,57 @@ def fetch_health_and_yesterday_production(stations):
     return stations
 
 
+def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, performance_ratio=0.80):
+    """Calcola la produzione attesa di ieri usando l'irraggiamento sul piano
+    inclinato (Global Tilted Irradiance) di Open-Meteo, dati tilt/azimut reali
+    dell'impianto. Convenzione azimut Open-Meteo: 0=Sud, -90=Est, +90=Ovest
+    (stessa convenzione tipicamente usata in Italia per gli impianti FV).
+
+    Ritorna (expected_kwh, raw_hourly_debug).
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
+
+    rome = ZoneInfo("Europe/Rome")
+    yesterday = (datetime.now(rome) - timedelta(days=1)).date().isoformat()
+
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "global_tilted_irradiance",
+        "tilt": tilt,
+        "azimuth": azimuth,
+        "start_date": yesterday,
+        "end_date": yesterday,
+        "timezone": "Europe/Rome",
+    }
+    res = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=15)
+    res.raise_for_status()
+    data = res.json()
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    gti_values = hourly.get("global_tilted_irradiance", [])
+
+    if not capacity_kwp or capacity_kwp <= 0:
+        raise ValueError("Potenza installata (kWp) mancante o non valida per questo impianto")
+
+    total_kwh = 0.0
+    for gti in gti_values:
+        if gti is None:
+            continue
+        # GTI è una media oraria in W/m²: diviso 1000 (STC) * kWp * PR = kWh per quell'ora
+        total_kwh += (gti / 1000.0) * capacity_kwp * performance_ratio
+
+    debug = {
+        "date": yesterday,
+        "n_hourly_points": len(times),
+        "hourly_time": times,
+        "hourly_gti_w_m2": gti_values,
+    }
+    return round(total_kwh, 2), debug
+
+
 # ----------------------------------------------------------------------------
 # CARICAMENTO AUTOMATICO — impianti + stato + allarmi + produzione di ieri
 # vengono caricati da soli all'apertura della pagina, senza bisogno di bottoni.
@@ -547,6 +658,28 @@ if stations is not None:
                 except (TypeError, ValueError):
                     prod_html = f'<span class="production-chip">🔋 Ieri: {prod}</span>'
 
+            # --- Scostamento produzione reale vs attesa (se già calcolato) ---
+            deviation_html = ""
+            exp_result = st.session_state.expected_results.get(code)
+            if exp_result and prod is not None:
+                expected = exp_result.get("expected_kwh")
+                if expected:
+                    try:
+                        dev_pct = (float(prod) - expected) / expected * 100
+                        if dev_pct >= -8:
+                            dev_class = "deviation-chip-ok"
+                        elif dev_pct >= -20:
+                            dev_class = "deviation-chip-warn"
+                        else:
+                            dev_class = "deviation-chip-bad"
+                        sign = "+" if dev_pct >= 0 else ""
+                        deviation_html = (
+                            f'<span class="{dev_class}">📐 Attesa: {expected:,.1f} kWh '
+                            f'· Scostamento: {sign}{dev_pct:.1f}%</span>'
+                        )
+                    except (TypeError, ZeroDivisionError):
+                        pass
+
             alarms = s.get("alarm_texts") or []
             alarm_html = ""
             if alarms:
@@ -561,10 +694,72 @@ if stations is not None:
                     <span>⚡ {capacity} kWp</span>
                     <span>📅 Connesso: {grid_date}</span>
                     {prod_html}
+                    {deviation_html}
                 </div>
                 {alarm_html}
             </div>
             """, unsafe_allow_html=True)
+
+            # --- Configurazione orientamento (tilt/azimut/coordinate) + calcolo scostamento ---
+            saved_cfg = st.session_state.plant_config.get(code, {})
+            default_lat = saved_cfg.get("lat") or s.get("latitude") or s.get("stationLatitude") or 0.0
+            default_lon = saved_cfg.get("lon") or s.get("longitude") or s.get("stationLongitude") or 0.0
+
+            with st.expander(f"⚙️ Configura orientamento — {name}"):
+                cfg_col1, cfg_col2, cfg_col3, cfg_col4 = st.columns(4)
+                with cfg_col1:
+                    tilt_val = st.number_input(
+                        "Tilt (°)", min_value=0.0, max_value=90.0,
+                        value=float(saved_cfg.get("tilt", 30.0)), step=1.0, key=f"tilt_{code}",
+                        help="Inclinazione dei pannelli rispetto all'orizzontale"
+                    )
+                with cfg_col2:
+                    azimuth_val = st.number_input(
+                        "Azimut (°)", min_value=-180.0, max_value=180.0,
+                        value=float(saved_cfg.get("azimuth", 0.0)), step=1.0, key=f"az_{code}",
+                        help="0 = Sud, -90 = Est, +90 = Ovest, ±180 = Nord"
+                    )
+                with cfg_col3:
+                    lat_val = st.number_input(
+                        "Latitudine", value=float(default_lat), format="%.6f", key=f"lat_{code}"
+                    )
+                with cfg_col4:
+                    lon_val = st.number_input(
+                        "Longitudine", value=float(default_lon), format="%.6f", key=f"lon_{code}"
+                    )
+                pr_val = st.slider(
+                    "Performance Ratio (perdite di sistema)", min_value=0.50, max_value=1.00,
+                    value=float(saved_cfg.get("pr", 0.80)), step=0.01, key=f"pr_{code}",
+                    help="Tiene conto di perdite da inverter, cablaggio, temperatura, sporcizia. Tipico: 0.75–0.85"
+                )
+
+                save_col, calc_col = st.columns(2)
+                with save_col:
+                    if st.button("💾 Salva configurazione", key=f"save_{code}"):
+                        st.session_state.plant_config[code] = {
+                            "tilt": tilt_val, "azimuth": azimuth_val,
+                            "lat": lat_val, "lon": lon_val, "pr": pr_val,
+                        }
+                        save_plant_config(st.session_state.plant_config)
+                        st.success("Configurazione salvata ✅")
+
+                with calc_col:
+                    if st.button("📊 Calcola scostamento produzione", key=f"calc_{code}"):
+                        try:
+                            cap = float(capacity) if capacity not in (None, "N/D") else None
+                            expected_kwh, raw_debug = get_expected_production_yesterday(
+                                lat_val, lon_val, tilt_val, azimuth_val, cap, pr_val
+                            )
+                            st.session_state.expected_results[code] = {
+                                "expected_kwh": expected_kwh, "raw_debug": raw_debug
+                            }
+                            st.success(f"Produzione attesa ieri: {expected_kwh:,.1f} kWh")
+                        except Exception as e:
+                            st.error(f"Errore nel calcolo: {e}")
+
+                if code in st.session_state.expected_results:
+                    with st.expander("🛠️ Debug meteo/irraggiamento"):
+                        st.json(st.session_state.expected_results[code]["raw_debug"])
     else:
         df = pd.DataFrame(filtered)
         if has_status_data:
