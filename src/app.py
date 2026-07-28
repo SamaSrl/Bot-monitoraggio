@@ -39,7 +39,7 @@ def save_plant_config(config):
     os.replace(tmp_path, CONFIG_FILE)
 
 # ----------------------------------------------------------------------------
-# STILE DARK CYBERPUNK
+# STILI GRAFICI ORIGINALI (COLORI STATO + CYBERPUNK)
 # ----------------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -64,18 +64,44 @@ st.markdown("""
     .fs-title { font-size: 26px; font-weight: 700; color: #ffffff; margin: 0; }
     .fs-subtitle { font-size: 13px; color: #7ee8fa; font-family: 'JetBrains Mono', monospace; margin-top: 4px; }
     
+    /* CARD BASE PER STATO IMPIANTO */
     .plant-card {
+        border-radius: 14px;
+        padding: 22px;
+        margin-bottom: 20px;
         background: linear-gradient(160deg, rgba(18,26,42,0.9), rgba(9,13,22,0.9));
         border: 1px solid rgba(255,255,255,0.07);
-        border-left: 4px solid #00e5ff;
-        border-radius: 14px;
-        padding: 20px;
-        margin-bottom: 20px;
     }
-    .plant-name { font-size: 20px; font-weight: 700; color: #ffffff; }
+    .plant-card-ok {
+        border-left: 5px solid #00ff88 !important;
+        box-shadow: -5px 0 20px -5px rgba(0,255,136,0.2);
+    }
+    .plant-card-alarm {
+        border-left: 5px solid #ff3b3b !important;
+        box-shadow: -5px 0 20px -5px rgba(255,59,59,0.3);
+    }
+    .plant-card-offline {
+        border-left: 5px solid #8e9aaf !important;
+        box-shadow: -5px 0 20px -5px rgba(142,154,175,0.15);
+    }
+
+    .plant-name { font-size: 22px; font-weight: 700; color: #ffffff; }
     .plant-code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6fd8ff; background: rgba(0,229,255,0.08); padding: 3px 8px; border-radius: 6px; margin-left: 8px; }
     .plant-meta { font-size: 13px; color: #9fb0c3; margin-top: 10px; font-family: 'JetBrains Mono', monospace; }
     .plant-meta span { margin-right: 20px; }
+
+    .status-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        font-weight: 600;
+        float: right;
+    }
+    .badge-ok { background: rgba(0,255,136,0.12); color: #00ff88; border: 1px solid rgba(0,255,136,0.4); }
+    .badge-alarm { background: rgba(255,59,59,0.15); color: #ff5c5c; border: 1px solid rgba(255,59,59,0.5); }
+    .badge-offline { background: rgba(142,154,175,0.15); color: #a0aec0; border: 1px solid rgba(142,154,175,0.4); }
 
     .metric-box {
         background: rgba(255,255,255,0.02);
@@ -85,7 +111,7 @@ st.markdown("""
         text-align: center;
     }
     .metric-title { font-size: 11px; text-transform: uppercase; color: #8ea3b8; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.5px; }
-    .metric-num { font-size: 24px; font-weight: 700; color: #ffffff; margin-top: 4px; }
+    .metric-num { font-size: 22px; font-weight: 700; color: #ffffff; margin-top: 4px; }
 
     .deviation-chip-ok { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.5); color: #00ff88; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
     .deviation-chip-bad { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(255,59,59,0.12); border: 1px solid rgba(255,59,59,0.5); color: #ff8080; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; }
@@ -93,7 +119,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# API HUAWEI
+# LOGICA API HUAWEI (COMPLETA CON REAL-KPI ED ALLARMI)
 # ----------------------------------------------------------------------------
 if "fs_session" not in st.session_state: st.session_state.fs_session = None
 if "token_time" not in st.session_state: st.session_state.token_time = 0
@@ -125,6 +151,29 @@ def fetch_stations():
     data = res.json()
     st.session_state.stations = data.get("data") or []
     return st.session_state.stations
+
+def fetch_station_real_kpi(station_codes):
+    session = get_authenticated_session()
+    res = session.post(f"{BASE_DOMAIN}/thirdData/getStationRealKpi", json={"stationCodes": station_codes}, timeout=15)
+    data = res.json()
+    result = {}
+    for item in data.get("data") or []:
+        result[item.get("stationCode")] = item.get("dataItemMap", {}) or {}
+    return result
+
+def fetch_active_alarms(station_code):
+    session = get_authenticated_session()
+    rome = ZoneInfo("Europe/Rome")
+    now_ms = int(datetime.now(rome).timestamp() * 1000)
+    begin_ms = now_ms - (7 * 24 * 3600 * 1000)
+    
+    res = session.post(
+        f"{BASE_DOMAIN}/thirdData/getAlarmList",
+        json={"stationCodes": station_code, "beginTime": begin_ms, "endTime": now_ms, "status": 1, "language": "it_IT"},
+        timeout=15
+    )
+    data = res.json()
+    return data.get("data") or []
 
 def fetch_yesterday_real_kwh(station_code):
     session = get_authenticated_session()
@@ -178,13 +227,13 @@ def get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity_kwp, pr=
         return 0.0, 0.0, []
 
 # ----------------------------------------------------------------------------
-# HEADER
+# HEADER PRINCIPALE
 # ----------------------------------------------------------------------------
 st.markdown("""
 <div class="fs-header">
     <div>
         <p class="fs-title">🛰️ FusionSolar Control Center</p>
-        <p class="fs-subtitle">MONITORAGGIO MULTI-IMPIANTO · ANALISI PRESTAZIONE GIORNO PRECEDENTE</p>
+        <p class="fs-subtitle">MONITORAGGIO MULTI-IMPIANTO · ANALISI PRESTAZIONE & ALLARMI REAL-TIME</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -210,7 +259,6 @@ if stations:
     st.sidebar.markdown("---")
     saved_cfg = st.session_state.plant_config.get(code, {})
     
-    # Auto-fix capacità (se Huawei invia 1.131 assumiamo intenda 1131 kWp)
     raw_capacity = float(selected_st.get("capacity") or 0.0)
     if 0 < raw_capacity < 10 and "rivignano" in selected_name.lower():
         raw_capacity = raw_capacity * 1000.0
@@ -236,19 +284,42 @@ if stations:
         st.sidebar.success("Configurazione salvata con successo!")
 
 # ----------------------------------------------------------------------------
-# PAGINA PRINCIPALE (LISTA DI TUTTI GLI IMPIANTI)
+# PAGINA PRINCIPALE (VISUALIZZAZIONE IMPIANTI CON COLORI STATO ED ALLARMI)
 # ----------------------------------------------------------------------------
 if not stations:
     st.warning("Nessun impianto trovato o errore durante il login.")
 else:
+    # Recuperiamo real_kpi globale per lo stato real-time
+    all_codes = ",".join([s.get("stationCode", "") for s in stations if s.get("stationCode")])
+    real_kpi_map = fetch_station_real_kpi(all_codes)
+    
     for st_item in stations:
         st_code = st_item.get("stationCode")
         st_name = st_item.get("stationName")
         st_addr = st_item.get("stationAddr", "N/D")
         
-        # Recupera parametri salvati o default
-        cfg = st.session_state.plant_config.get(st_code, {})
+        kpi = real_kpi_map.get(st_code, {})
+        real_power_kw = float(kpi.get("real_health_state") or 0.0) # Potenza istantanea se disponibile o stato
         
+        # Recupera Allarmi Attivi per definire il colore dello stato
+        alarms = fetch_active_alarms(st_code)
+        
+        # Determinazione del Bordo Colorato e Badge
+        # 1 = Normale, 2 = Fault/Allarme, 3 = Offline
+        real_health = kpi.get("real_health_state")
+        
+        if len(alarms) > 0 or str(real_health) == "2":
+            card_class = "plant-card-alarm"
+            badge_html = f'<span class="status-badge badge-alarm">⚠️ ALLARME ({len(alarms)})</span>'
+        elif str(real_health) == "3" or str(real_health) == "3.0":
+            card_class = "plant-card-offline"
+            badge_html = '<span class="status-badge badge-offline">🔌 DISCONNESSO</span>'
+        else:
+            card_class = "plant-card-ok"
+            badge_html = '<span class="status-badge badge-ok">🟢 NORMALE</span>'
+        
+        # Parametri configurati
+        cfg = st.session_state.plant_config.get(st_code, {})
         raw_cap = float(st_item.get("capacity") or 0.0)
         if 0 < raw_cap < 10 and "rivignano" in st_name.lower():
             raw_cap = raw_cap * 1000.0
@@ -260,7 +331,7 @@ else:
         lon = float(cfg.get("lon") or st_item.get("longitude") or 13.042)
         pr = float(cfg.get("pr", 0.80))
 
-        # Calcoli Ieri
+        # Dati Ieri Reali e Attesi
         real_kwh, date_str = fetch_yesterday_real_kwh(st_code)
         exp_kwh, psh, _ = get_expected_production_yesterday(lat, lon, tilt, azimuth, capacity, pr)
         
@@ -268,13 +339,14 @@ else:
         dev_class = "deviation-chip-ok" if dev >= -8 else "deviation-chip-bad"
         sign = "+" if dev >= 0 else ""
 
-        # Card Impianto
+        # Rendering Card Impianto Colorata
         st.markdown(f"""
-        <div class="plant-card">
+        <div class="plant-card {card_class}">
+            {badge_html}
             <span class="plant-name">☀️ {st_name}</span><span class="plant-code">{st_code}</span>
             <div class="plant-meta">
                 <span>📍 Location: <b>{st_addr}</b></span>
-                <span>⚡ Potenza: <b>{capacity:,.1f} kWp</b></span>
+                <span>⚡ Potenza Nominale: <b>{capacity:,.1f} kWp</b></span>
                 <span>📐 Tilt: <b>{tilt}°</b> | Azimut: <b>{azimuth}°</b> | PR: <b>{pr}</b></span>
             </div>
         </div>
@@ -304,5 +376,11 @@ else:
                 <div style="margin-top:6px;"><span class="{dev_class}">{sign}{dev:.1f}%</span></div>
             </div>
             """, unsafe_allow_html=True)
+
+        # Sezione Allarmi Attivi (se presenti)
+        if alarms:
+            with st.expander(f"⚠️ Allarmi Attivi per {st_name} ({len(alarms)})", expanded=True):
+                for alm in alarms:
+                    st.error(f"**[{alm.get('alarmName', 'Allarme')}]** - Livello: {alm.get('severity')} | Generato il: {alm.get('raiseTime')}")
 
         st.markdown("<br>", unsafe_allow_html=True)
