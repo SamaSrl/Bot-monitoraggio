@@ -7,7 +7,8 @@ import html
 import textwrap
 import pandas as pd
 
-st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️", layout="wide")
+st.set_page_config(page_title="FusionSolar Control Center", page_icon="🛰️", layout="wide",
+                    initial_sidebar_state="collapsed")
 
 
 def render_html(html):
@@ -75,7 +76,7 @@ st.markdown("""
     html, body, [class*="css"]  { font-family: 'Space Grotesk', sans-serif; }
 
     .stApp {
-        background: radial-gradient(circle at 20% 0%, #0d1b2a 0%, #060a12 45%, #030407 100%);
+        background: radial-gradient(circle at 20% 0%, #1a2c3d 0%, #121c26 45%, #0d151c 100%);
         color: #e6edf3;
     }
 
@@ -668,6 +669,39 @@ def calculate_expected_for_configured(stations, force=False):
         st.session_state.expected_results[code] = result
 
 
+def apply_default_config_to_all(stations, tilt, azimuth, pr, skip_already_configured=True):
+    """Applica tilt/azimut/PR di default a TUTTI gli impianti che non hanno
+    ancora una configurazione salvata, usando le coordinate fornite da
+    Huawei quando disponibili. Gli impianti senza lat/lon note vengono
+    saltati e restituiti separatamente, perché senza coordinate il calcolo
+    meteo non è possibile. Ritorna (n_applicati, lista_codici_saltati_per_coordinate)."""
+    applied = 0
+    skipped_no_coords = []
+
+    for s in stations:
+        code = s.get("stationCode")
+        if not code:
+            continue
+        if skip_already_configured and code in st.session_state.plant_config:
+            continue
+
+        lat = s.get("latitude") or s.get("stationLatitude")
+        lon = s.get("longitude") or s.get("stationLongitude")
+        if not lat or not lon:
+            skipped_no_coords.append(s.get("stationName", code))
+            continue
+
+        auto_cap = capacity_to_kwp(s.get("capacity"))
+        st.session_state.plant_config[code] = {
+            "tilt": tilt, "azimuth": azimuth, "lat": float(lat), "lon": float(lon),
+            "pr": pr, "kwp_override": auto_cap or 0.0,
+        }
+        applied += 1
+
+    save_plant_config(st.session_state.plant_config)
+    return applied, skipped_no_coords
+
+
 # ----------------------------------------------------------------------------
 # CARICAMENTO AUTOMATICO — impianti + stato + allarmi + produzione di ieri
 # vengono caricati da soli all'apertura della pagina, senza bisogno di bottoni.
@@ -804,6 +838,36 @@ with st.sidebar:
                 calculate_expected_for_configured(stations_for_sidebar, force=True)
             st.success("Ricalcolo completato")
 
+        st.divider()
+        with st.expander("🌍 Applica a TUTTI gli impianti non configurati"):
+            st.caption(
+                "Imposta tilt/azimut/PR di default e applicali in un colpo solo a tutti "
+                "gli impianti che non hai ancora configurato singolarmente. Le coordinate "
+                "vengono prese da Huawei quando disponibili; gli impianti privi di "
+                "coordinate verranno saltati (dovrai configurarli a mano)."
+            )
+            bulk_tilt = st.number_input("Tilt (°) di default", min_value=0.0, max_value=90.0,
+                                         value=30.0, step=1.0, key="bulk_tilt")
+            bulk_azimuth = st.number_input("Azimut (°) di default", min_value=-180.0, max_value=180.0,
+                                            value=0.0, step=1.0, key="bulk_azimuth",
+                                            help="0 = Sud, -90 = Est, +90 = Ovest")
+            bulk_pr = st.slider("Performance Ratio di default", min_value=0.50, max_value=1.00,
+                                 value=0.80, step=0.01, key="bulk_pr")
+
+            if st.button("⚡ Applica e calcola per tutti", type="primary", use_container_width=True):
+                with st.spinner("Applico la configurazione e calcolo la produzione attesa..."):
+                    n_applied, skipped = apply_default_config_to_all(
+                        stations_for_sidebar, bulk_tilt, bulk_azimuth, bulk_pr
+                    )
+                    calculate_expected_for_configured(stations_for_sidebar, force=False)
+                if n_applied:
+                    st.success(f"✅ Configurazione applicata a {n_applied} impianti e produzione attesa calcolata.")
+                if skipped:
+                    st.warning(
+                        f"⚠️ {len(skipped)} impianti saltati per mancanza di coordinate: "
+                        + ", ".join(skipped[:10]) + ("..." if len(skipped) > 10 else "")
+                    )
+
 
 # ----------------------------------------------------------------------------
 # RENDER
@@ -906,12 +970,9 @@ if stations is not None:
                 if expected:
                     try:
                         dev_pct = (float(prod) - expected) / expected * 100
-                        if dev_pct >= -8:
-                            dev_class = "deviation-chip-ok"
-                        elif dev_pct >= -20:
-                            dev_class = "deviation-chip-warn"
-                        else:
-                            dev_class = "deviation-chip-bad"
+                        # Regola netta: produzione reale sotto l'attesa = rosso,
+                        # sopra l'attesa = verde.
+                        dev_class = "deviation-chip-ok" if dev_pct >= 0 else "deviation-chip-bad"
                         sign = "+" if dev_pct >= 0 else ""
                         deviation_html = (
                             f'<span class="{dev_class}">📐 Attesa: {expected:,.1f} kWh '
